@@ -20,6 +20,8 @@ class SaleRepository:
             raise
 
     def create_sale_items(self, items):
+        if not items:
+            return None
         try:
             res = supabase.table("sale_items").insert(items).execute()
             return res

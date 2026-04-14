@@ -61,16 +61,22 @@ class SaleService:
             }
             for item in cart
         ]
-        self.sale_repo.create_sale_items(items_data)
+        try:
+            self.sale_repo.create_sale_items(items_data)
+        except Exception as e:
+            raise Exception(f"Error al registrar items de venta: {str(e)}")
 
         # 3. Create payment record
-        self.sale_repo.create_payment(
-            {
-                "sale_id": sale_id,
-                "method": payment_method,
-                "amount": amount_received if payment_method == "cash" else total,
-            }
-        )
+        try:
+            self.sale_repo.create_payment(
+                {
+                    "sale_id": sale_id,
+                    "method": payment_method,
+                    "amount": amount_received if payment_method == "cash" else total,
+                }
+            )
+        except Exception as e:
+            raise Exception(f"Error al registrar pago: {str(e)}")
 
         # 4. Update inventory & log movements
         for item in cart:
