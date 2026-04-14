@@ -2,37 +2,53 @@
 
 class ProductController:
 
-    def __init__(self, service):
+    def __init__(self, service, app):
         self.service = service
+        self.app = app
 
-    def create(self):
-        name = input("Nombre: ")
-        price = input("Precio: ")
+    def get_products(self):
+        try:
+            return self.service.list_products()
+        except Exception as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return []
 
-        data = {
-            "name": name,
-            "price": price
-        }
+    def search_products(self, query: str):
+        try:
+            return self.service.search_products(query)
+        except Exception as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return []
 
-        res = self.service.create_product(data)
-        print(res.data)
+    def create_product(self, data: dict) -> bool:
+        try:
+            self.service.create_product(data)
+            self.app.show_snackbar("Producto creado exitosamente ✓")
+            return True
+        except Exception as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return False
 
-    def list(self):
-        res = self.service.list_products()
-        print("Productos:\n")
-        for element in res.data:
-            print(f"id: {element['id']} - Nombre: {element['name']} - Precio: {element['price']}")
+    def update_product(self, product_id: str, data: dict) -> bool:
+        try:
+            self.service.update_product(product_id, data)
+            self.app.show_snackbar("Producto actualizado ✓")
+            return True
+        except Exception as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return False
 
-    def products_by_tenant(self):
-        tenant_id = input("ID del tenant: ")
-        res = self.service.get_products_by_tenant(tenant_id)
-        print("Productos:\n")
-        for element in res.data:
-            print(f"id: {element['id']} - Nombre: {element['name']} - Precio: {element['price']}")
+    def delete_product(self, product_id: str) -> bool:
+        try:
+            self.service.delete_product(product_id)
+            self.app.show_snackbar("Producto eliminado")
+            return True
+        except Exception as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return False
 
-    def buscar_producto(self):
-        name = input("Nombre del producto a buscar: ")
-        res = self.service.buscar_producto(name)
-        print("Resultados:\n")
-        for element in res.data:
-            print(f"id: {element['id']} - Nombre: {element['name']} - Precio: {element['price']}")
+    def get_count(self) -> int:
+        try:
+            return self.service.get_count()
+        except Exception:
+            return 0
