@@ -27,9 +27,6 @@ class AnalyticsController:
         """
         self.service = service
 
-    # ------------------------------------------------------------------ #
-    # Dashboard completo                                                  #
-    # ------------------------------------------------------------------ #
     def get_dashboard(self) -> dict:
         """
         Punto de entrada principal para dashboard_view.py.
@@ -43,9 +40,6 @@ class AnalyticsController:
             print(f"[ANALYTICS ERROR] {e}")
             return {}
 
-    # ------------------------------------------------------------------ #
-    # Ventas por día (CLI debug / vista parcial)                         #
-    # ------------------------------------------------------------------ #
     def show_daily_sales(self):
         try:
             sales = self.service.get_daily_sales()
@@ -57,9 +51,7 @@ class AnalyticsController:
             print(f"[ANALYTICS ERROR] {e}")
             return []
 
-    # ------------------------------------------------------------------ #
-    # Top productos                                                       #
-    # ------------------------------------------------------------------ #
+
     def show_top_products(self):
         try:
             products = self.service.get_top_products()
