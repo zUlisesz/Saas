@@ -25,6 +25,9 @@
 from domain.schemas.sale_schemas import CreateSaleRequest
 from domain.exceptions import AuthenticationError, RepositoryError
 from session.session import Session
+from infrastructure.logging_config import get_logger
+
+_log = get_logger(__name__)
 
 
 class CreateSaleUseCase:
@@ -175,4 +178,4 @@ class CreateSaleUseCase:
         try:
             self.sale_repo.delete_sale(sale_id)
         except Exception as e:
-            print(f"[WARN] No se pudo limpiar venta huérfana {sale_id}: {e}")
+            _log.warning("No se pudo limpiar venta huérfana %s: %s", sale_id, e)

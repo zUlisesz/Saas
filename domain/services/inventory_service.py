@@ -25,6 +25,9 @@
 
 from session.session import Session
 from domain.exceptions import AuthenticationError, ValidationError
+from infrastructure.logging_config import get_logger
+
+_log = get_logger(__name__)
 
 
 class InventoryService:
@@ -57,11 +60,32 @@ class InventoryService:
     def get_low_stock_alerts(self) -> list:
         """
         Devuelve productos con stock_actual <= stock_minimo.
-        Cada item: {product_id, product_name, stock_actual, stock_minimo, deficit}
+        Cada item incluye severity: "critical" (stock=0) o "warning" (stock<=minimo).
         """
         tenant_id = self._require_auth()
         res = self.repo.get_low_stock(tenant_id)
-        return res.data or []
+        items = res.data or []
+        for item in items:
+            stock = item.get("stock_actual", 0)
+            item["severity"] = "critical" if stock == 0 else "warning"
+        return items
+
+    def classify_inventory(self, items: list) -> dict:
+        """
+        Filtra una lista de items de inventario en tres categorías.
+        Returns: {ok: [...], warning: [...], critical: [...]}
+        """
+        ok, warning, critical = [], [], []
+        for item in items:
+            stock = item.get("stock_actual", 0)
+            minimum = item.get("stock_minimo", 5)
+            if stock == 0:
+                critical.append({**item, "severity": "critical"})
+            elif stock <= minimum:
+                warning.append({**item, "severity": "warning"})
+            else:
+                ok.append({**item, "severity": "ok"})
+        return {"ok": ok, "warning": warning, "critical": critical}
 
     def has_low_stock(self) -> bool:
         """Helper rápido para que Dashboard muestre o no el banner de alerta."""
@@ -211,8 +235,7 @@ class InventoryService:
                     pass
 
         except Exception as e:
-            # Nunca romper una venta por un fallo de inventario
-            print(f"[INVENTORY WARNING] No se pudo actualizar stock: {e}")
+            _log.warning("No se pudo actualizar stock para producto %s: %s", product_id, e)
 
     # ------------------------------------------------------------------ #
     # Historial kardex de un producto                                   #

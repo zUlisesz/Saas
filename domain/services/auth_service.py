@@ -8,9 +8,11 @@
 #     no esté inyectado en el controlador.
 #   • _require_auth ya no existe aquí: login/logout no la necesitan.
 
+import uuid
+
 from session.session import Session
-from domain.schemas.auth_schemas import LoginRequest
-from domain.exceptions import AuthenticationError
+from domain.schemas.auth_schemas import LoginRequest, RegisterRequest
+from domain.exceptions import AuthenticationError, RepositoryError
 
 
 class AuthService:
@@ -54,10 +56,6 @@ class AuthService:
         El flujo recomendado pasa por RegisterUserUseCase, que usa
         excepciones de dominio y es más fácil de testear.
         """
-        import uuid
-        from domain.schemas.auth_schemas import RegisterRequest
-        from domain.exceptions import RepositoryError
-
         request = RegisterRequest(email=email, password=password)
         request.validate()
 
