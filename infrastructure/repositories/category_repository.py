@@ -40,16 +40,22 @@ class CategoryRepository:
                 raise Exception("No tienes permisos para actualizar esta categoría")
             raise
 
-    def delete(self, category_id):
+    def delete(self, category_id, tenant_id):
         try:
-            return (
+            res = (
                 supabase.table("categories")
                 .delete()
                 .eq("id", category_id)
+                .eq("tenant_id", tenant_id)
                 .execute()
             )
+            if not res.data:
+                raise Exception("No se encontró la categoría o no tienes permisos para eliminarla")
+            return res
         except Exception as e:
             error_msg = str(e)
+            if "foreign key" in error_msg.lower():
+                raise Exception("No se puede eliminar: hay productos asignados a esta categoría")
             if "row level security" in error_msg.lower():
                 raise Exception("No tienes permisos para eliminar esta categoría")
             raise

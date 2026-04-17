@@ -39,4 +39,4 @@ class CategoryService:
 
     def delete_category(self, category_id: str):
         self._require_auth()
-        self.repo.delete(category_id)
+        self.repo.delete(category_id, Session.tenant_id)

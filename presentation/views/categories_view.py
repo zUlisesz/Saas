@@ -170,12 +170,13 @@ class CategoriesView:
 
     def _confirm_delete(self, category_id: str):
         def do_delete(e):
+            ok = self.ctrl.delete_category(category_id)  # ejecutar primero
             dialog.open = False
             self.page.update()
-            ok = self.ctrl.delete_category(category_id)
             if ok:
                 self._categories = self.ctrl.get_categories()
                 self._render_grid()
+
 
         def cancel(e):
             dialog.open = False
