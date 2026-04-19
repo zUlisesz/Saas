@@ -139,3 +139,35 @@ class ProductRepository:
             .eq("is_active", True)
             .execute()
         )
+
+    # ------------------------------------------------------------------ #
+    # Fase 4 — Barcodes pendientes e historial                           #
+    # ------------------------------------------------------------------ #
+
+    def get_pending_products(self, tenant_id: str):
+        """Productos cuyo barcode aún es PENDING-* (sin barcode real asignado)."""
+        return (
+            supabase.table("products")
+            .select("id, name, barcode, barcode_type")
+            .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
+            .like("barcode", "PENDING-%")
+            .execute()
+        )
+
+    def add_barcode_history(self, data: dict):
+        """Inserta una entrada en product_barcode_history. Fire & forget."""
+        try:
+            supabase.table("product_barcode_history").insert(data).execute()
+        except Exception:
+            pass  # No interrumpir el flujo principal si el historial falla
+
+    def get_barcode_stats(self, tenant_id: str) -> dict:
+        """Llama a la RPC barcode_coverage_stats() creada en migración 8."""
+        try:
+            res = supabase.rpc(
+                "barcode_coverage_stats", {"p_tenant_id": tenant_id}
+            ).execute()
+            return (res.data or [{}])[0]
+        except Exception:
+            return {}

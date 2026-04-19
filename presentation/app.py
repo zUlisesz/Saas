@@ -80,6 +80,7 @@ class App:
 
         # ── Servicios ─────────────────────────────────────────────
         from domain.services.auth_service       import AuthService
+        from domain.services.barcode_service    import BarcodeService
         from domain.services.product_service    import ProductService
         from domain.services.category_service   import CategoryService
         from domain.services.event_service      import EventService
@@ -90,7 +91,8 @@ class App:
         from domain.services.recharge_service   import RechargeService    # NUEVO Fase 6
 
         auth_svc      = AuthService(auth_repo, tenant_repo)
-        product_svc   = ProductService(product_repo)
+        barcode_svc   = BarcodeService()
+        product_svc   = ProductService(product_repo, barcode_service=barcode_svc)
         category_svc  = CategoryService(category_repo)
         event_svc     = EventService(event_repo)
         analytics_svc = AnalyticsService(analytics_repo)

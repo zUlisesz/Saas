@@ -1,13 +1,11 @@
 # application/controllers/product_controller.py
 #
-# CAMBIOS (refactor arquitectural):
-#   • Maneja excepciones de dominio específicas:
-#       ValidationError  → el usuario cometió un error de entrada
-#       NexaPOSError     → error de dominio conocido
-#       Exception        → error inesperado del sistema (mensaje genérico)
-#   • La firma pública es idéntica — las vistas no cambian.
-#
-# FASE 4 (Código de Barras) conservada.
+# Fase 4 — Código de Barras:
+#   • assign_barcode()       → delega a service.assign_barcode() + snackbar
+#   • assign_barcodes_bulk() → delega + snackbar con conteo
+#   • get_pending_products() → delega
+#   • get_barcode_stats()    → delega
+#   • generate_barcode()     → acepta barcode_type opcional
 
 from domain.exceptions import ValidationError, NexaPOSError
 
@@ -32,7 +30,7 @@ class ProductController:
             self.app.show_snackbar(str(ex), error=True)
             return []
 
-    # ─── Fase 4 ───────────────────────────────────────────────────
+    # ─── Código de barras ─────────────────────────────────────────
 
     def find_by_barcode(self, barcode: str) -> dict | None:
         try:
@@ -41,11 +39,49 @@ class ProductController:
             self.app.show_snackbar(str(ex), error=True)
             return None
 
-    def generate_barcode(self, product_id: str) -> str:
+    def generate_barcode(self, product_id: str, barcode_type: str = "ean13") -> str:
         try:
-            return self.service.generate_barcode_for(product_id)
+            return self.service.generate_barcode_for(product_id, barcode_type)
         except Exception:
             return ""
+
+    def assign_barcode(
+        self, product_id: str, barcode: str, barcode_type: str = "ean13"
+    ) -> bool:
+        try:
+            self.service.assign_barcode(product_id, barcode, barcode_type)
+            self.app.show_snackbar("Código de barras asignado ✓")
+            return True
+        except ValidationError as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return False
+        except NexaPOSError as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return False
+        except Exception as ex:
+            self.app.show_snackbar(f"Error inesperado: {ex}", error=True)
+            return False
+
+    def assign_barcodes_bulk(self, barcode_type: str = "ean13") -> int:
+        try:
+            count = self.service.assign_barcodes_bulk(barcode_type)
+            self.app.show_snackbar(f"{count} código(s) asignado(s) ✓")
+            return count
+        except Exception as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return 0
+
+    def get_pending_products(self) -> list[dict]:
+        try:
+            return self.service.get_pending_products()
+        except Exception:
+            return []
+
+    def get_barcode_stats(self) -> dict:
+        try:
+            return self.service.get_barcode_stats()
+        except Exception:
+            return {}
 
     # ─── CRUD ─────────────────────────────────────────────────────
 
