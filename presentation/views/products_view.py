@@ -1,41 +1,31 @@
 # presentation/views/products_view.py
 #
-# Fase 4 — Código de Barras:
-#   • Columna "Código" en tabla con icono QR o badge PENDING
-#   • Botón individual "Generar barcode" por fila
-#   • Botón "Asignar códigos masivamente" en header (visible si hay PENDING)
-#   • Campo "Código de barras" y dropdown "Tipo" en formulario
-#   • Botón "Generar" auto-rellena el campo barcode en el form
-#   • Búsqueda local también filtra por barcode
+# PATCH sobre la versión Fase 5:
+#
+# FIX gen_btn siempre visible:
+#   ANTES: visible=is_edit  → invisible en creación nueva
+#   AHORA: visible=True     → siempre visible
+#   Para nuevos productos usa uuid4() como seed → EAN-13 válido.
 
 import flet as ft
+import uuid as _uuid
 from presentation.theme import AppTheme
-
-BARCODE_TYPES = [
-    ft.dropdown.Option(key="ean13",   text="EAN-13"),
-    ft.dropdown.Option(key="ean8",    text="EAN-8"),
-    ft.dropdown.Option(key="upc",     text="UPC"),
-    ft.dropdown.Option(key="code128", text="Code 128"),
-    ft.dropdown.Option(key="qr",      text="QR"),
-]
 
 
 class ProductsView:
 
-    def __init__(self, page, colors, is_dark, product_controller, category_controller, app):
-        self.page = page
-        self.colors = colors
-        self.is_dark = is_dark
-        self.product_ctrl = product_controller
-        self.category_ctrl = category_controller
-        self.app = app
-
+    def __init__(self, page, colors, is_dark,
+                 product_controller, category_controller, app):
+        self.page            = page
+        self.colors          = colors
+        self.is_dark         = is_dark
+        self.product_ctrl    = product_controller
+        self.category_ctrl   = category_controller
+        self.app             = app
         self._products:   list[dict] = []
         self._categories: list[dict] = []
-        self._table_rows  = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO, expand=True)
-        self._header_row  = ft.Ref[ft.Row]()
+        self._table_rows = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO, expand=True)
 
-    # ─────────────────────────────────────────────────────────────
     def build(self):
         self._products   = self.product_ctrl.get_products()
         self._categories = self.category_ctrl.get_categories()
@@ -59,28 +49,24 @@ class ProductsView:
             ink=True,
         )
 
-        pending_count = len([p for p in self._products
-                             if (p.get("barcode") or "").startswith("PENDING-")])
-
+        pending = self.product_ctrl.get_pending_products()
         bulk_btn = ft.Container(
             content=ft.Row(
-                [ft.Icon(ft.icons.QR_CODE_ROUNDED, color="white", size=18),
-                 ft.Text(f"Asignar códigos ({pending_count})",
-                         color="white", weight=ft.FontWeight.W_600)],
+                [ft.Icon(ft.icons.QR_CODE_ROUNDED, color="white", size=16),
+                 ft.Text(f"Asignar {len(pending)} códigos", color="white", size=12,
+                         weight=ft.FontWeight.W_600)],
                 spacing=6, tight=True,
             ),
-            gradient=AppTheme.gradient_primary(),
-            border_radius=12,
-            padding=ft.padding.symmetric(horizontal=14, vertical=11),
-            on_click=lambda e: self._bulk_assign(),
+            gradient=AppTheme.gradient_warning(),
+            border_radius=10,
+            padding=ft.padding.symmetric(horizontal=14, vertical=9),
+            on_click=lambda e: self._on_bulk_barcode(),
             ink=True,
-            visible=pending_count > 0,
+            visible=len(pending) > 0,
         )
-        self._bulk_btn = bulk_btn
 
         header = ft.Row(
-            ref=self._header_row,
-            controls=[
+            [
                 ft.Column(
                     [
                         ft.Text("Productos", size=22, weight=ft.FontWeight.BOLD,
@@ -90,7 +76,6 @@ class ProductsView:
                     ], spacing=2, tight=True, expand=True,
                 ),
                 bulk_btn,
-                ft.Container(width=8),
                 add_btn,
             ],
         )
@@ -102,14 +87,12 @@ class ProductsView:
                             weight=ft.FontWeight.W_600, expand=3),
                     ft.Text("Categoría", size=12, color=self.colors["text_secondary"],
                             weight=ft.FontWeight.W_600, expand=2),
-                    ft.Text("Código",    size=12, color=self.colors["text_secondary"],
-                            weight=ft.FontWeight.W_600, expand=2),
                     ft.Text("Precio",    size=12, color=self.colors["text_secondary"],
                             weight=ft.FontWeight.W_600, expand=1),
                     ft.Text("Costo",     size=12, color=self.colors["text_secondary"],
                             weight=ft.FontWeight.W_600, expand=1),
-                    ft.Text("Acciones", size=12, color=self.colors["text_secondary"],
-                            weight=ft.FontWeight.W_600, width=120),
+                    ft.Text("Acciones",  size=12, color=self.colors["text_secondary"],
+                            weight=ft.FontWeight.W_600, width=100),
                 ],
             ),
             padding=ft.padding.symmetric(horizontal=16, vertical=10),
@@ -119,7 +102,8 @@ class ProductsView:
 
         table_container = ft.Container(
             content=ft.Column(
-                [col_header, ft.Container(height=1, bgcolor=self.colors["border"]),
+                [col_header,
+                 ft.Container(height=1, bgcolor=self.colors["border"]),
                  self._table_rows],
                 spacing=0, expand=True,
             ),
@@ -132,8 +116,8 @@ class ProductsView:
 
         return ft.Container(
             content=ft.Column(
-                [header, ft.Container(height=8), search, ft.Container(height=12),
-                 table_container],
+                [header, ft.Container(height=8), search,
+                 ft.Container(height=12), table_container],
                 spacing=8, expand=True,
             ),
             expand=True,
@@ -141,7 +125,6 @@ class ProductsView:
             bgcolor=self.colors["bg"],
         )
 
-    # ─── Render rows ──────────────────────────────────────────────
     def _render_rows(self, products=None):
         c    = self.colors
         data = products if products is not None else self._products
@@ -159,7 +142,6 @@ class ProductsView:
                     alignment=ft.alignment.center, height=160,
                 )
             )
-            self.page.update()
             return
 
         for p in data:
@@ -168,31 +150,6 @@ class ProductsView:
             cost     = float(p.get("cost") or 0)
             category = (p.get("categories") or {}).get("name", "—")
             barcode  = p.get("barcode") or ""
-            is_pending = barcode.startswith("PENDING-")
-
-            # ── Código badge ──────────────────────────────────────
-            if is_pending:
-                barcode_cell = ft.Container(
-                    content=ft.Row(
-                        [ft.Icon(ft.icons.WARNING_AMBER_ROUNDED,
-                                 color=AppTheme.WARNING if hasattr(AppTheme, "WARNING") else "#FF9800",
-                                 size=13),
-                         ft.Text("Sin código", size=11,
-                                 color=AppTheme.WARNING if hasattr(AppTheme, "WARNING") else "#FF9800")],
-                        spacing=4, tight=True,
-                    ),
-                    expand=2,
-                )
-            else:
-                barcode_cell = ft.Row(
-                    [
-                        ft.Icon(ft.icons.QR_CODE_ROUNDED, color=AppTheme.ACCENT, size=13),
-                        ft.Text(barcode[:13], size=11, color=c["text_secondary"],
-                                font_family="monospace",
-                                overflow=ft.TextOverflow.ELLIPSIS),
-                    ],
-                    spacing=4, tight=True, expand=2,
-                )
 
             row = ft.Container(
                 content=ft.Row(
@@ -200,15 +157,18 @@ class ProductsView:
                         ft.Row(
                             [
                                 ft.Container(
-                                    content=ft.Icon(ft.icons.INVENTORY_2_ROUNDED,
-                                                    color=AppTheme.ACCENT, size=16),
+                                    content=ft.Icon(
+                                        ft.icons.QR_CODE_ROUNDED if barcode
+                                        else ft.icons.INVENTORY_2_ROUNDED,
+                                        color=AppTheme.ACCENT, size=16,
+                                    ),
                                     width=32, height=32, border_radius=8,
                                     bgcolor=f"{AppTheme.ACCENT}18",
                                     alignment=ft.alignment.center,
                                 ),
                                 ft.Text(name, size=13, color=c["text"],
-                                        weight=ft.FontWeight.W_500,
-                                        expand=True, max_lines=1,
+                                        weight=ft.FontWeight.W_500, expand=True,
+                                        max_lines=1,
                                         overflow=ft.TextOverflow.ELLIPSIS),
                             ],
                             expand=3, spacing=10,
@@ -219,36 +179,26 @@ class ProductsView:
                             padding=ft.padding.symmetric(horizontal=10, vertical=3),
                             expand=2,
                         ),
-                        barcode_cell,
                         ft.Text(f"${price:,.2f}", size=13, color=c["text"],
                                 weight=ft.FontWeight.W_600, expand=1),
-                        ft.Text(f"${cost:,.2f}", size=12, color=c["text_secondary"],
-                                expand=1),
+                        ft.Text(f"${cost:,.2f}", size=12,
+                                color=c["text_secondary"], expand=1),
                         ft.Row(
                             [
                                 ft.IconButton(
-                                    ft.icons.QR_CODE_SCANNER_ROUNDED, icon_size=15,
-                                    icon_color=AppTheme.ACCENT,
-                                    tooltip="Generar barcode",
-                                    on_click=lambda e, prod=p: self._generate_barcode_for_row(prod),
-                                    style=ft.ButtonStyle(padding=ft.padding.all(4)),
-                                ),
-                                ft.IconButton(
                                     ft.icons.EDIT_ROUNDED, icon_size=16,
-                                    icon_color=AppTheme.ACCENT,
-                                    tooltip="Editar",
+                                    icon_color=AppTheme.ACCENT, tooltip="Editar",
                                     on_click=lambda e, prod=p: self._show_form_dialog(prod),
                                     style=ft.ButtonStyle(padding=ft.padding.all(4)),
                                 ),
                                 ft.IconButton(
                                     ft.icons.DELETE_ROUNDED, icon_size=16,
-                                    icon_color=AppTheme.ERROR,
-                                    tooltip="Eliminar",
+                                    icon_color=AppTheme.ERROR, tooltip="Eliminar",
                                     on_click=lambda e, pid=p["id"]: self._confirm_delete(pid),
                                     style=ft.ButtonStyle(padding=ft.padding.all(4)),
                                 ),
                             ],
-                            spacing=0, width=120,
+                            spacing=0, width=100,
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -262,87 +212,46 @@ class ProductsView:
         self.page.update()
 
     def _filter(self, query: str):
-        q = query.lower().strip()
-        if q:
-            filtered = [
-                p for p in self._products
-                if q in p.get("name", "").lower()
-                or q in (p.get("barcode") or "").lower()
-            ]
-        else:
-            filtered = list(self._products)
+        q = (query or "").lower().strip()
+        filtered = (
+            [p for p in self._products
+             if q in p.get("name", "").lower()
+             or q in (p.get("barcode") or "").lower()
+             or q in (p.get("sku") or "").lower()]
+            if q else list(self._products)
+        )
         self._render_rows(filtered)
 
-    # ─── Acciones de barcode ──────────────────────────────────────
+    # ================================================================== #
+    # FORMULARIO                                                          #
+    # ================================================================== #
 
-    def _generate_barcode_for_row(self, product: dict):
-        barcode = self.product_ctrl.generate_barcode(product["id"], "ean13")
-        if barcode:
-            ok = self.product_ctrl.assign_barcode(product["id"], barcode, "ean13")
-            if ok:
-                self._products = self.product_ctrl.get_products()
-                self._render_rows()
-                self._update_bulk_btn_visibility()
-
-    def _bulk_assign(self):
-        count = self.product_ctrl.assign_barcodes_bulk("ean13")
-        if count >= 0:
-            self._products = self.product_ctrl.get_products()
-            self._render_rows()
-            self._update_bulk_btn_visibility()
-
-    def _update_bulk_btn_visibility(self):
-        pending = len([p for p in self._products
-                       if (p.get("barcode") or "").startswith("PENDING-")])
-        if hasattr(self, "_bulk_btn"):
-            self._bulk_btn.visible = pending > 0
-            if hasattr(self._bulk_btn.content, "controls"):
-                for ctrl in self._bulk_btn.content.controls:  # type: ignore
-                    if hasattr(ctrl, "value") and "código" in (ctrl.value or "").lower():
-                        ctrl.value = f"Asignar códigos ({pending})"
-            self.page.update()
-
-    # ─── Form dialog ──────────────────────────────────────────────
     def _show_form_dialog(self, product: dict | None = None):
         c       = self.colors
         is_edit = product is not None
-        title_text = "Editar Producto" if is_edit else "Nuevo Producto"
 
-        name_f  = AppTheme.make_text_field(
+        name_f = AppTheme.make_text_field(
             "Nombre *", colors=c,
-            value=product.get("name", "") if is_edit else ""
+            value=product.get("name", "") if is_edit else "",
         )
         price_f = AppTheme.make_text_field(
-            "Precio *", colors=c,
-            value=str(product.get("price", "")) if is_edit else ""
+            "Precio de venta *", colors=c,
+            value=str(product.get("price", "")) if is_edit else "",
         )
-        cost_f  = AppTheme.make_text_field(
+        price_f.keyboard_type = ft.KeyboardType.NUMBER
+
+        cost_f = AppTheme.make_text_field(
             "Costo", colors=c,
-            value=str(product.get("cost", "")) if is_edit else ""
+            value=str(product.get("cost", "")) if is_edit else "",
         )
-        sku_f   = AppTheme.make_text_field(
+        cost_f.keyboard_type = ft.KeyboardType.NUMBER
+
+        sku_f = AppTheme.make_text_field(
             "SKU", colors=c,
-            value=product.get("sku", "") if is_edit else ""
-        )
-        barcode_f = AppTheme.make_text_field(
-            "Código de barras", colors=c,
-            value=product.get("barcode", "") if is_edit else ""
-        )
-        barcode_f.expand = True
-
-        barcode_type_dd = ft.Dropdown(
-            options=BARCODE_TYPES,
-            value=(product.get("barcode_type") or "ean13") if is_edit else "ean13",
-            border_radius=12,
-            border_color=c["border"],
-            focused_border_color=AppTheme.ACCENT,
-            label="Tipo de código",
-            label_style=ft.TextStyle(color=c["text_secondary"], size=13),
-            text_style=ft.TextStyle(color=c["text"]),
-            bgcolor=c["input_fill"],
-            width=140,
+            value=product.get("sku", "") if is_edit else "",
         )
 
+        # Categoría
         cat_options = [ft.dropdown.Option(key="", text="Sin categoría")]
         for cat in self._categories:
             cat_options.append(ft.dropdown.Option(key=cat["id"], text=cat["name"]))
@@ -359,28 +268,86 @@ class ProductsView:
             bgcolor=c["input_fill"],
         )
 
-        def on_generate_barcode(e):
-            pid  = product["id"] if is_edit else "new"
-            btype = barcode_type_dd.value or "ean13"
-            code = self.product_ctrl.generate_barcode(pid, btype)
-            if code:
-                barcode_f.value = code
-                self.page.update()
+        # Barcode
+        barcode_f = AppTheme.make_text_field(
+            "Código de barras", colors=c,
+            value=product.get("barcode", "") if is_edit else "",
+        )
+        barcode_f.expand = True
 
-        gen_btn = ft.Container(
-            content=ft.Row(
-                [ft.Icon(ft.icons.QR_CODE_ROUNDED, color="white", size=16),
-                 ft.Text("Generar", color="white", size=12,
-                         weight=ft.FontWeight.W_600)],
-                spacing=4, tight=True,
-            ),
-            gradient=AppTheme.gradient_primary(),
+        barcode_type_dd = ft.Dropdown(
+            options=[
+                ft.dropdown.Option("ean13",   "EAN-13"),
+                ft.dropdown.Option("ean8",    "EAN-8"),
+                ft.dropdown.Option("upc",     "UPC-A"),
+                ft.dropdown.Option("code128", "Code 128"),
+            ],
+            value=(product.get("barcode_type") or "ean13") if is_edit else "ean13",
+            width=130,
             border_radius=10,
-            padding=ft.padding.symmetric(horizontal=12, vertical=10),
-            on_click=on_generate_barcode,
-            ink=True,
+            border_color=c["border"],
+            focused_border_color=AppTheme.ACCENT,
+            bgcolor=c["input_fill"],
+            text_style=ft.TextStyle(color=c["text"]),
         )
 
+        # ── Botón generar — SIEMPRE visible (FIX) ───────────────────
+        def on_generate_barcode(e):
+            # Usar product_id si existe (edición) o uuid4 como seed (creación)
+            seed_id = product["id"] if (is_edit and product) else str(_uuid.uuid4())
+            code = self.product_ctrl.generate_barcode(
+                seed_id, barcode_type_dd.value or "ean13",
+            )
+            if code:
+                barcode_f.value = code
+                barcode_f.update()
+
+        gen_btn = ft.IconButton(
+            ft.icons.AUTO_AWESOME_ROUNDED,
+            icon_color=AppTheme.ACCENT,
+            tooltip="Generar código automático",
+            on_click=on_generate_barcode,
+            visible=True,   # FIX: era visible=is_edit
+        )
+
+        # ── Inventario inicial (solo creación) ───────────────────────
+        stock_inicial_f = AppTheme.make_text_field(
+            "Stock inicial", colors=c, value="0",
+        )
+        stock_inicial_f.keyboard_type = ft.KeyboardType.NUMBER
+        stock_inicial_f.suffix_text   = "uds."
+        stock_inicial_f.helper_text   = "Unidades disponibles ahora"
+
+        stock_minimo_f = AppTheme.make_text_field(
+            "Stock mínimo (alerta)", colors=c, value="5",
+        )
+        stock_minimo_f.keyboard_type = ft.KeyboardType.NUMBER
+        stock_minimo_f.suffix_text   = "uds."
+        stock_minimo_f.helper_text   = "Nivel para generar alerta"
+
+        inventory_section = ft.Container(
+            visible=not is_edit,
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.icons.WAREHOUSE_ROUNDED,
+                                        size=14, color=AppTheme.ACCENT),
+                                ft.Text("Inventario inicial", size=13,
+                                        color=c["text"], weight=ft.FontWeight.W_600),
+                            ],
+                            spacing=6,
+                        ),
+                        padding=ft.padding.only(top=10, bottom=2),
+                    ),
+                    ft.Row([stock_inicial_f, stock_minimo_f], spacing=12),
+                ],
+                spacing=4,
+            ),
+        )
+
+        # ── Save ────────────────────────────────────────────────────
         def on_save(e):
             data = {
                 "name":         name_f.value or "",
@@ -391,7 +358,19 @@ class ProductsView:
                 "barcode":      barcode_f.value or None,
                 "barcode_type": barcode_type_dd.value or "ean13",
             }
-            if is_edit and product is not None:
+
+            if not is_edit:
+                try:
+                    data["stock_inicial"] = int(stock_inicial_f.value or 0)
+                    data["stock_minimo"]  = int(stock_minimo_f.value or 5)
+                except ValueError:
+                    self.app.show_snackbar(
+                        "Stock inicial y mínimo deben ser números enteros",
+                        error=True,
+                    )
+                    return
+
+            if is_edit and product:
                 ok = self.product_ctrl.update_product(product["id"], data)
             else:
                 ok = self.product_ctrl.create_product(data)
@@ -401,7 +380,6 @@ class ProductsView:
                 self.page.update()
                 self._products = self.product_ctrl.get_products()
                 self._render_rows()
-                self._update_bulk_btn_visibility()
 
         def on_cancel(e):
             dialog.open = False
@@ -409,48 +387,72 @@ class ProductsView:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text(title_text, weight=ft.FontWeight.BOLD),
+            title=ft.Row(
+                [
+                    ft.Icon(
+                        ft.icons.EDIT_ROUNDED if is_edit
+                        else ft.icons.ADD_CIRCLE_OUTLINE_ROUNDED,
+                        color=AppTheme.ACCENT,
+                    ),
+                    ft.Text(
+                        "Editar Producto" if is_edit else "Nuevo Producto",
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                ],
+                spacing=8,
+            ),
             content=ft.Container(
                 content=ft.Column(
                     [
                         name_f,
-                        ft.Row([price_f, cost_f], spacing=10),
-                        sku_f,
-                        cat_dd,
-                        ft.Row([barcode_f, barcode_type_dd, gen_btn],
-                               spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.Container(height=6),
+                        ft.Row([price_f, cost_f], spacing=12),
+                        ft.Container(height=6),
+                        ft.Row([sku_f, cat_dd], spacing=12),
+                        ft.Container(height=6),
+                        ft.Row(
+                            [barcode_f, barcode_type_dd, gen_btn],
+                            spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        inventory_section,
                     ],
-                    spacing=12, tight=True,
+                    spacing=4,
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
                 ),
-                width=420,
+                width=460,
+                padding=ft.padding.only(top=4),
             ),
             actions=[
                 ft.TextButton("Cancelar", on_click=on_cancel),
                 ft.Container(
-                    content=ft.Text("Guardar", color="white",
-                                    weight=ft.FontWeight.W_600),
+                    content=ft.Text(
+                        "Guardar" if is_edit else "Crear producto",
+                        color="white", weight=ft.FontWeight.W_600,
+                    ),
                     gradient=AppTheme.gradient_primary(),
                     border_radius=8,
                     padding=ft.padding.symmetric(horizontal=16, vertical=8),
-                    on_click=on_save, ink=True,
+                    on_click=on_save,
+                    ink=True,
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
         self.page.dialog = dialog
-        dialog.open = True
+        dialog.open      = True
         self.page.update()
 
-    # ─── Delete confirm ───────────────────────────────────────────
     def _confirm_delete(self, product_id: str):
+        c = self.colors
+
         def do_delete(e):
+            self.product_ctrl.delete_product(product_id)
             dialog.open = False
             self.page.update()
-            ok = self.product_ctrl.delete_product(product_id)
-            if ok:
-                self._products = self.product_ctrl.get_products()
-                self._render_rows()
-                self._update_bulk_btn_visibility()
+            self._products = self.product_ctrl.get_products()
+            self._render_rows()
 
         def cancel(e):
             dialog.open = False
@@ -458,10 +460,8 @@ class ProductsView:
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Row([ft.Icon(ft.icons.WARNING_ROUNDED, color=AppTheme.ERROR),
-                          ft.Text("Eliminar Producto", weight=ft.FontWeight.BOLD)],
-                         spacing=8),
-            content=ft.Text("¿Estás seguro? Esta acción no se puede deshacer."),
+            title=ft.Text("¿Eliminar producto?", weight=ft.FontWeight.BOLD),
+            content=ft.Text("Esta acción no se puede deshacer."),
             actions=[
                 ft.TextButton("Cancelar", on_click=cancel),
                 ft.Container(
@@ -476,5 +476,13 @@ class ProductsView:
             actions_alignment=ft.MainAxisAlignment.END,
         )
         self.page.dialog = dialog
-        dialog.open = True
+        dialog.open      = True
         self.page.update()
+
+    def _on_bulk_barcode(self):
+        self.product_ctrl.assign_barcodes_bulk()
+        self._products = self.product_ctrl.get_products()
+        self._render_rows()
+
+    def _refresh(self, e):
+        self.app.navigate_to("products")

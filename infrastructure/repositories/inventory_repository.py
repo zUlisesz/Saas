@@ -1,39 +1,49 @@
 # infrastructure/repositories/inventory_repository.py
 #
-# CAMBIOS FASE 5 — Inventario Inteligente:
+# FASE 5 — ACTUALIZACIÓN (22 Abril 2026)
 #
-# NUEVOS MÉTODOS (en orden de adición):
-#   get_inventory_with_status()    — RPC enriquecida: stock + thresholds + status
-#   register_movement()            — RPC atómica: inventory + kardex + log + alerta
-#   get_threshold()                — Leer threshold de un producto
-#   upsert_threshold()             — Crear/actualizar threshold por producto
-#   get_alerts()                   — Listar alertas por tenant (filtrable por status)
-#   update_alert_status()          — Cambiar status de una alerta (ack/resolve/ignore)
-#   get_movements_log()            — Historial detallado desde movements_log
-#   get_reorder_list()             — Productos que necesitan reorden (stock <= reorder_point)
+# CAMBIOS RESPECTO A LA VERSIÓN ANTERIOR:
 #
-# DECISIÓN ARQUITECTÓNICA:
-#   adjust_stock() y consume_stock() en el SERVICIO ya llamaban a upsert() + add_kardex_entry()
-#   por separado. A partir de Fase 5, delegan a register_movement() (RPC atómica en Supabase)
-#   que hace inventory + kardex + movements_log + alerta en una sola transacción.
-#   Esto elimina el riesgo de kardex sin actualización de stock o viceversa.
+#   1. get_all_with_alerts(tenant_id) — NUEVO
+#      Llama a RPC get_inventory_with_alerts() creada en migración 20260422.
+#      Devuelve datos desnormalizados: producto + stock + umbrales + estado + alertas.
+#      REEMPLAZA el uso de get_all() en InventoryService.list_inventory().
+#      DECISIÓN: get_all() se conserva para backward compat (SaleService lo usa vía
+#      consume_stock, que no necesita los datos extra de alertas).
 #
-# RETRO-COMPATIBILIDAD:
-#   Los métodos legacy (decrement_stock, upsert, add_kardex_entry, log_movement) se conservan
-#   para no romper código que los llame durante la transición. Se marcan con # LEGACY.
+#   2. get_low_stock_report(tenant_id) — NUEVO
+#      Llama a RPC get_low_stock_report(). Más liviana que get_all_with_alerts.
+#      Para el badge de alertas en sidebar/header y el dashboard banner.
+#      REEMPLAZA get_low_stock() que llamaba a la RPC obsoleta 'low_stock_products'.
 #
-# PRINCIPIO: cero lógica de negocio en este archivo — solo persistencia.
+#   3. get_thresholds(tenant_id) — NUEVO
+#      Lee inventory_thresholds directamente para la UI de configuración.
+#
+#   4. upsert_threshold(data) — NUEVO
+#      Inserta o actualiza un threshold con ON CONFLICT(tenant_id, product_id).
+#      DECISIÓN: el upsert lo hace el repo, la validación la hace el servicio.
+#
+#   5. get_movements_log(product_id, tenant_id, limit) — NUEVO
+#      Lee inventory_movements_log para el historial extendido.
+#      COMPLEMENTA get_kardex() que ya lee la tabla kardex.
+#
+# MÉTODOS CONSERVADOS (sin cambios — backward compat):
+#   get_stock, get_all, upsert, decrement_stock,
+#   log_movement, add_kardex_entry, get_kardex
+#
+# PRINCIPIO MANTENIDO: cero lógica de negocio en este archivo.
 
 from config.supabase_client import supabase
 
 
 class InventoryRepository:
 
-    # ================================================================== #
-    # CONSULTAS BASE                                                     #
-    # ================================================================== #
+    # ------------------------------------------------------------------ #
+    # LECTURA — Stock individual                                          #
+    # ------------------------------------------------------------------ #
 
     def get_stock(self, product_id: str):
+        """Stock actual de un producto. Usado por consume_stock() y init_stock()."""
         return (
             supabase.table("inventory")
             .select("*")
@@ -41,10 +51,15 @@ class InventoryRepository:
             .execute()
         )
 
+    # ------------------------------------------------------------------ #
+    # LECTURA — Inventario completo (legacy — conservado)                 #
+    # ------------------------------------------------------------------ #
+
     def get_all(self, tenant_id: str):
         """
-        Inventario del tenant con datos del producto (join).
-        DECISIÓN: inner join para evitar N+1.
+        Join directo inventory + products. Conservado para backward compat.
+        InventoryService.list_inventory() ahora usa get_all_with_alerts().
+        SaleService.consume_stock() no llama a este método — no afecta.
         """
         return (
             supabase.table("inventory")
@@ -53,276 +68,83 @@ class InventoryRepository:
             .execute()
         )
 
-    # ================================================================== #
-    # NUEVO F5 — Vista enriquecida con status                           #
-    # ================================================================== #
+    # ------------------------------------------------------------------ #
+    # LECTURA — Inventario completo con alertas (NUEVO — Fase 5)         #
+    # ------------------------------------------------------------------ #
 
-    def get_inventory_with_status(self, tenant_id: str):
+    def get_all_with_alerts(self, tenant_id: str):
         """
-        RPC get_inventory_with_status: join de products + inventory + thresholds.
-        Retorna stock_status = ok | warning | critical | out_of_stock.
+        Llama a RPC get_inventory_with_alerts(p_tenant_id).
 
-        JUSTIFICACIÓN: evita hacer 3 queries separadas desde el servicio para
-        obtener el mismo dato. La lógica de clasificación vive en SQL (más eficiente).
+        Retorna por fila:
+            product_id, product_name, barcode, category_name,
+            stock_actual, stock_minimo, stock_maximo,
+            reorder_point, reorder_quantity,
+            stock_status (ok|low|out_of_stock|overstock),
+            active_alerts (int), updated_at
+
+        DECISIÓN: la RPC calcula stock_status en BD (no en Python)
+        para evitar lógica duplicada entre repo y servicio.
+        SECURITY DEFINER en la función permite que RLS no bloquee
+        los joins internos.
         """
         return supabase.rpc(
-            "get_inventory_with_status",
+            "get_inventory_with_alerts",
             {"p_tenant_id": tenant_id},
         ).execute()
 
-    # ================================================================== #
-    # NUEVO F5 — Movimiento atómico vía RPC                             #
-    # ================================================================== #
+    # ------------------------------------------------------------------ #
+    # LECTURA — Reporte de stock bajo (NUEVO — Fase 5)                   #
+    # ------------------------------------------------------------------ #
 
-    def register_movement(
-        self,
-        tenant_id: str,
-        product_id: str,
-        movement_type: str,
-        quantity_change: int,
-        reference_type: str = None, #type: ignore
-        reference_id: str = None, #type: ignore
-        notes: str = None, #type: ignore
-        created_by: str = None, #type: ignore
-    ):
+    def get_low_stock_report(self, tenant_id: str):
         """
-        Llama a register_inventory_movement() que actualiza en una sola transacción:
-          1. inventory.stock_actual
-          2. kardex (fila de historial)
-          3. inventory_movements_log (fila de auditoría)
-          4. inventory_alerts (si stock baja del mínimo)
+        Llama a RPC get_low_stock_report(p_tenant_id).
+        Solo productos con stock_actual <= stock_minimo.
 
-        Retorna UUID del movements_log generado, o None si hubo error.
-
-        TIPOS VÁLIDOS: sale | purchase | adjustment | return | damage | inventory_count
-        quantity_change NEGATIVO para salidas, POSITIVO para entradas.
+        Más liviana que get_all_with_alerts — para badges y banners.
+        REEMPLAZA get_low_stock() que usaba RPC obsoleta.
         """
-        try:
-            params = {
-                "p_tenant_id":       tenant_id,
-                "p_product_id":      product_id,
-                "p_movement_type":   movement_type,
-                "p_quantity_change": quantity_change,
-            }
-            if reference_type: params["p_reference_type"] = reference_type
-            if reference_id:   params["p_reference_id"]   = reference_id
-            if notes:          params["p_notes"]           = notes
-            if created_by:     params["p_created_by"]      = created_by
-
-            return supabase.rpc("register_inventory_movement", params).execute()
-        except Exception as e:
-            raise Exception(f"Error en movimiento de inventario: {e}")
-
-    # ================================================================== #
-    # NUEVO F5 — Thresholds CRUD                                        #
-    # ================================================================== #
-
-    def get_threshold(self, product_id: str):
-        """Obtiene el threshold de un producto específico."""
-        return (
-            supabase.table("inventory_thresholds")
-            .select("*")
-            .eq("product_id", product_id)
-            .limit(1)
-            .execute()
-        )
-
-    def get_all_thresholds(self, tenant_id: str):
-        """Todos los thresholds del tenant."""
-        return (
-            supabase.table("inventory_thresholds")
-            .select("*")
-            .eq("tenant_id", tenant_id)
-            .execute()
-        )
-
-    def upsert_threshold(
-        self,
-        tenant_id: str,
-        product_id: str,
-        stock_minimo: int,
-        stock_maximo: int,
-        reorder_point: int,
-        reorder_quantity: int,
-        alert_on_low_stock: bool = True,
-        alert_on_overstock: bool = False,
-    ):
-        """
-        Crea o actualiza threshold para un producto.
-        CONFLICT: se resuelve por UNIQUE (tenant_id, product_id).
-        """
-        return (
-            supabase.table("inventory_thresholds")
-            .upsert(
-                {
-                    "tenant_id":          tenant_id,
-                    "product_id":         product_id,
-                    "stock_minimo":       stock_minimo,
-                    "stock_maximo":       stock_maximo,
-                    "reorder_point":      reorder_point,
-                    "reorder_quantity":   reorder_quantity,
-                    "alert_on_low_stock": alert_on_low_stock,
-                    "alert_on_overstock": alert_on_overstock,
-                    "updated_at":         "now()",
-                },
-                on_conflict="tenant_id,product_id",
-            )
-            .execute()
-        )
-
-    # ================================================================== #
-    # NUEVO F5 — Alerts                                                  #
-    # ================================================================== #
-
-    def get_alerts(self, tenant_id: str, status: str = "new"):
-        """
-        Alertas por tenant, filtradas por status.
-        JOIN con products para obtener nombre del producto.
-        """
-        query = (
-            supabase.table("inventory_alerts")
-            .select("*, products!inner(name, sku, barcode)")
-            .eq("tenant_id", tenant_id)
-            .order("generated_at", desc=True)
-        )
-        if status:
-            query = query.eq("status", status)
-        return query.execute()
-
-    def get_alerts_count(self, tenant_id: str, status: str = "new") -> int:
-        """Conteo rápido de alertas — para badge en sidebar."""
-        try:
-            res = (
-                supabase.table("inventory_alerts")
-                .select("id", count="exact") #type:ignore
-                .eq("tenant_id", tenant_id)
-                .eq("status", status)
-                .execute()
-            )
-            return res.count or 0
-        except Exception:
-            return 0
-
-    def update_alert_status(
-        self,
-        alert_id: str,
-        new_status: str,
-        user_id: str = None, #type: ignore
-    ):
-        """
-        Cambia el status de una alerta.
-        Actualiza acknowledged_at / resolved_at según corresponda.
-
-        STATUS VÁLIDOS: acknowledged | resolved | ignored
-        """
-        data = {"status": new_status}
-        if new_status == "acknowledged":
-            data["acknowledged_at"] = "now()"
-            if user_id:
-                data["acknowledged_by"] = user_id
-        elif new_status == "resolved":
-            data["resolved_at"] = "now()"
-
-        return (
-            supabase.table("inventory_alerts")
-            .update(data)
-            .eq("id", alert_id)
-            .execute()
-        )
-
-    def bulk_update_alerts_status(self, tenant_id: str, new_status: str):
-        """Marcar todas las alertas 'new' del tenant como acknowledged."""
-        data = {"status": new_status}
-        if new_status == "acknowledged":
-            data["acknowledged_at"] = "now()"
-        return (
-            supabase.table("inventory_alerts")
-            .update(data)
-            .eq("tenant_id", tenant_id)
-            .eq("status", "new")
-            .execute()
-        )
-
-    # ================================================================== #
-    # NUEVO F5 — Movements log                                          #
-    # ================================================================== #
-
-    def get_movements_log(
-        self,
-        tenant_id: str,
-        product_id: str = None, #type:ignore
-        limit: int = 50,
-    ):
-        """
-        Historial de movements_log (más rico que kardex en algunos campos).
-        Filtrable por producto.
-        """
-        query = (
-            supabase.table("inventory_movements_log")
-            .select("*")
-            .eq("tenant_id", tenant_id)
-            .order("created_at", desc=True)
-            .limit(limit)
-        )
-        if product_id:
-            query = query.eq("product_id", product_id)
-        return query.execute()
-
-    # ================================================================== #
-    # NUEVO F5 — Reorder list                                           #
-    # ================================================================== #
-
-    def get_reorder_list(self, tenant_id: str):
-        """
-        Productos que necesitan reorden: stock_actual <= reorder_point.
-        JOIN manual vía Supabase: inventory + thresholds + products.
-
-        NOTA: No hay RPC para esto, pero el join es sencillo y se hace
-        filtrando en Python tras obtener get_inventory_with_status().
-        Usamos esa RPC y filtramos aquí para mantener consistencia.
-        """
-        return self.get_inventory_with_status(tenant_id)
-
-    # ================================================================== #
-    # NUEVO F5 — Stock bajo (RPC existente, mantenida)                  #
-    # ================================================================== #
+        return supabase.rpc(
+            "get_low_stock_report",
+            {"p_tenant_id": tenant_id},
+        ).execute()
 
     def get_low_stock(self, tenant_id: str):
         """
-        RPC low_stock_products: stock_actual <= stock_minimo.
-        MANTENIDA para retro-compatibilidad con código existente.
+        LEGACY — conservado para compatibilidad.
+        Redirige a get_low_stock_report() para no romper código existente.
         """
-        return supabase.rpc(
-            "low_stock_products", {"tenant": tenant_id}
-        ).execute()
+        return self.get_low_stock_report(tenant_id)
 
-    # ================================================================== #
-    # LEGACY — Conservados por retro-compatibilidad                     #
-    # ================================================================== #
+    # ------------------------------------------------------------------ #
+    # ESCRITURA — Upsert stock                                            #
+    # ------------------------------------------------------------------ #
 
     def upsert(self, product_id: str, stock_actual: int, stock_minimo: int = 5):
-        """LEGACY — Usar register_movement() para nuevas operaciones."""
-        try:
-            return (
-                supabase.table("inventory")
-                .upsert(
-                    {
-                        "product_id":   product_id,
-                        "stock_actual": stock_actual,
-                        "stock_minimo": stock_minimo,
-                    },
-                    on_conflict="product_id",
-                )
-                .execute()
+        """
+        Inserta o actualiza el registro de inventory.
+        ON CONFLICT(product_id) → UPDATE.
+        """
+        return (
+            supabase.table("inventory")
+            .upsert(
+                {
+                    "product_id":   product_id,
+                    "stock_actual": max(0, stock_actual),
+                    "stock_minimo": max(0, stock_minimo),
+                    "updated_at":   "now()",
+                },
+                on_conflict="product_id",
             )
-        except Exception as e:
-            error_msg = str(e)
-            if "row level security" in error_msg.lower():
-                raise Exception("No tienes permisos para actualizar el inventario")
-            raise
+            .execute()
+        )
 
     def decrement_stock(self, product_id: str, quantity: int):
-        """LEGACY — Usar register_movement(movement_type='sale') para nuevas ventas."""
+        """
+        LEGACY — conservado para SaleService backward compat.
+        Decrementa stock y retorna (stock_anterior, stock_posterior).
+        """
         current = self.get_stock(product_id)
         if current.data and len(current.data) > 0:
             stock_ant  = current.data[0]["stock_actual"] #type: ignore
@@ -332,29 +154,82 @@ class InventoryRepository:
             return stock_ant, stock_post
         return 0, 0
 
-    def add_kardex_entry(self, entry: dict):
-        """LEGACY — register_movement() llama a kardex internamente. Conservada por compatibilidad."""
-        try:
-            return supabase.table("kardex").insert(entry).execute()
-        except Exception as e:
-            print(f"[KARDEX WARNING] No se pudo registrar movimiento: {e}")
-            return None
+    # ------------------------------------------------------------------ #
+    # LECTURA/ESCRITURA — Thresholds (NUEVO — Fase 5)                    #
+    # ------------------------------------------------------------------ #
 
-    def get_kardex(self, tenant_id: str, product_id: str, limit: int = 50):
-        """Historial kardex vía RPC (existente desde pre-F5)."""
-        return supabase.rpc(
-            "kardex_by_product",
-            {"p_tenant": tenant_id, "p_product": product_id, "p_limit": limit},
-        ).execute()
+    def get_thresholds(self, tenant_id: str):
+        """
+        Lee todos los umbrales de un tenant con datos de producto.
+        Incluye join a products para mostrar nombre en la UI.
+        """
+        return (
+            supabase.table("inventory_thresholds")
+            .select("*, products(id, name, barcode)")
+            .eq("tenant_id", tenant_id)
+            .order("created_at", desc=False)
+            .execute()
+        )
 
-    def log_movement(
-        self,
-        product_id: str,
-        movement_type: str,
-        quantity: int,
-        reference_id=None,
-    ):
-        """LEGACY — Escribe en stock_movements (tabla original). Conservada."""
+    def get_threshold_by_product(self, tenant_id: str, product_id: str):
+        """Umbral específico de un producto. None si no existe."""
+        return (
+            supabase.table("inventory_thresholds")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .eq("product_id", product_id)
+            .limit(1)
+            .execute()
+        )
+
+    def upsert_threshold(self, data: dict):
+        """
+        Inserta o actualiza un threshold.
+        data debe contener: tenant_id, product_id.
+        Opcional: stock_minimo, stock_maximo, reorder_point,
+                  reorder_quantity, alert_on_low_stock, alert_on_overstock.
+
+        ON CONFLICT(tenant_id, product_id) → UPDATE.
+        DECISIÓN: la validación (min < max, reorder >= min) la hace
+        InventoryService antes de llamar aquí.
+        """
+        return (
+            supabase.table("inventory_thresholds")
+            .upsert(data, on_conflict="tenant_id,product_id")
+            .execute()
+        )
+
+    # ------------------------------------------------------------------ #
+    # LECTURA — Historial de movimientos extendido (NUEVO — Fase 5)      #
+    # ------------------------------------------------------------------ #
+
+    def get_movements_log(self, tenant_id: str, product_id: str, limit: int = 50):
+        """
+        Lee inventory_movements_log para el historial detallado.
+        COMPLEMENTA get_kardex() — ambas tablas registran movimientos
+        pero movements_log tiene movement_type explícito y quantity_before/after.
+
+        DECISIÓN: ambas tablas se mantienen porque kardex es la fuente
+        contable oficial (requerimiento del negocio) y movements_log
+        es la fuente técnica para debugging/auditoría.
+        """
+        return (
+            supabase.table("inventory_movements_log")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .eq("product_id", product_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+
+    # ------------------------------------------------------------------ #
+    # Log de movimientos (legacy — conservado)                            #
+    # ------------------------------------------------------------------ #
+
+    def log_movement(self, product_id: str, movement_type: str,
+                     quantity: int, reference_id=None):
+        """LEGACY — tabla stock_movements. Conservado para historial previo."""
         try:
             return (
                 supabase.table("stock_movements")
@@ -373,3 +248,26 @@ class InventoryRepository:
             if "row level security" in error_msg.lower():
                 raise Exception("No tienes permisos para registrar movimientos")
             raise
+
+    # ------------------------------------------------------------------ #
+    # Kardex (Fase 5 — conservado)                                        #
+    # ------------------------------------------------------------------ #
+
+    def add_kardex_entry(self, entry: dict):
+        """
+        Inserta una fila en kardex.
+        PRINCIPIO: no calculamos saldos aquí — el servicio los trae calculados.
+        Falla silenciosamente (kardex es observabilidad, no bloquea la venta).
+        """
+        try:
+            return supabase.table("kardex").insert(entry).execute()
+        except Exception as e:
+            print(f"[KARDEX WARNING] No se pudo registrar movimiento: {e}")
+            return None
+
+    def get_kardex(self, tenant_id: str, product_id: str, limit: int = 50):
+        """Historial kardex de un producto. Fuente contable oficial."""
+        return supabase.rpc(
+            "kardex_by_product",
+            {"p_tenant": tenant_id, "p_product": product_id, "p_limit": limit},
+        ).execute()

@@ -23,6 +23,9 @@
 #   Ningún servicio ni vista crea sus propias dependencias.
 
 import flet as ft
+from application.use_cases import create_product_use_case
+from domain.services.inventory_alert_service import InventoryAlertService
+from infrastructure.repositories.inventory_alert_repository import InventoryAlertRepository
 from presentation.theme import AppTheme
 
 
@@ -67,7 +70,9 @@ class App:
         from infrastructure.repositories.event_repository     import EventRepository
         from infrastructure.repositories.analytics_repository import AnalyticsRepository
         from infrastructure.repositories.ticket_repository    import TicketRepository
-
+        from infrastructure.repositories.inventory_alert_repository import InventoryAlertRepository
+        
+        alert_repo = InventoryAlertRepository()
         auth_repo      = AuthRepository()
         tenant_repo    = TenantRepository()
         product_repo   = ProductRepository()
@@ -89,7 +94,9 @@ class App:
         from domain.services.inventory_service  import InventoryService   # NUEVO Fase 5
         from domain.services.sale_service       import SaleService
         from domain.services.recharge_service   import RechargeService    # NUEVO Fase 6
+        from domain.services.inventory_alert_service import InventoryAlertService
 
+        alert_svc = InventoryAlertService(alert_repo=alert_repo)  # NUEVO Fase 5
         auth_svc      = AuthService(auth_repo, tenant_repo)
         barcode_svc   = BarcodeService()
         product_svc   = ProductService(product_repo, barcode_service=barcode_svc)
@@ -116,11 +123,17 @@ class App:
         recharge_svc = RechargeService(event_service=event_svc)
 
         # ── Use Cases ─────────────────────────────────────────────
-        from application.use_cases.create_sale_use_case   import CreateSaleUseCase
-        from application.use_cases.register_user_use_case import RegisterUserUseCase
-
-        create_sale_use_case  = CreateSaleUseCase(sale_repo, inventory_svc, event_svc)
-        register_use_case     = RegisterUserUseCase(auth_repo, tenant_repo)
+        from application.use_cases.create_sale_use_case    import CreateSaleUseCase
+        from application.use_cases.register_user_use_case  import RegisterUserUseCase
+        from application.use_cases.create_product_use_case import CreateProductUseCase  # ← AÑADIR
+        
+        create_sale_use_case    = CreateSaleUseCase(sale_repo, inventory_svc, event_svc)
+        register_use_case       = RegisterUserUseCase(auth_repo, tenant_repo)
+        create_product_use_case = CreateProductUseCase(                                 # ← AÑADIR
+            product_repo=product_repo,
+            inventory_service=inventory_svc,
+            event_service=event_svc,
+        )
 
         # ── Controladores ─────────────────────────────────────────
         from application.controllers.auth_controller       import AuthController
@@ -132,12 +145,20 @@ class App:
         from application.controllers.recharge_controller   import RechargeController   # NUEVO
 
         self.auth_controller      = AuthController(auth_svc, self, register_use_case)
-        self.product_controller   = ProductController(product_svc, self)
+        self.product_controller = ProductController(
+            product_svc,
+            self,
+            create_use_case=create_product_use_case,   # ← AÑADIR ESTE ARGUMENTO
+        )
         self.category_controller  = CategoryController(category_svc, self)
         self.sale_controller      = SaleController(sale_svc, self, create_sale_use_case)
         self.analytics_controller = AnalyticsController(analytics_svc)
         self.ticket_service       = ticket_svc
-        self.inventory_controller = InventoryController(inventory_svc, self)  # NUEVO
+        self.inventory_controller = InventoryController(
+           service=inventory_svc,           
+           app=self,
+          alert_service=alert_svc,    # NUEVO
+       )
         self.recharge_controller  = RechargeController(recharge_svc, self)    # NUEVO
 
     # ─── Navegación ───────────────────────────────────────────────
