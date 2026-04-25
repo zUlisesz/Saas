@@ -46,97 +46,32 @@ class App:
         self.page.window_min_height = 640
         self.page.window_center()
         self.page.theme_mode = ft.ThemeMode.DARK
-        self.page.theme      = ft.Theme(color_scheme_seed=AppTheme.ACCENT,
-                                        use_material3=True)
-        self.page.dark_theme = ft.Theme(color_scheme_seed=AppTheme.ACCENT,
-                                        use_material3=True)
+        self.page.theme      = ft.Theme()
+        self.page.dark_theme = ft.Theme()
         self.page.bgcolor = AppTheme.DARK["bg"]
         self.page.padding = 0
         self.page.spacing = 0
 
     # ─── Composition Root ─────────────────────────────────────────
     def _init_dependencies(self):
-
-        # ── Repositorios ──────────────────────────────────────────
-        from infrastructure.repositories.auth_repository      import AuthRepository
-        from infrastructure.repositories.tenant_repository    import TenantRepository
-        from infrastructure.repositories.product_repository   import ProductRepository
-        from infrastructure.repositories.category_repository  import CategoryRepository
-        from infrastructure.repositories.sale_repository      import SaleRepository
-        from infrastructure.repositories.inventory_repository import InventoryRepository
-        from infrastructure.repositories.event_repository     import EventRepository
-        from infrastructure.repositories.analytics_repository import AnalyticsRepository
-        from infrastructure.repositories.ticket_repository    import TicketRepository
-
-        auth_repo      = AuthRepository()
-        tenant_repo    = TenantRepository()
-        product_repo   = ProductRepository()
-        category_repo  = CategoryRepository()
-        sale_repo      = SaleRepository()
-        inventory_repo = InventoryRepository()
-        event_repo     = EventRepository()
-        analytics_repo = AnalyticsRepository()
-        ticket_repo    = TicketRepository()
-
-        # ── Servicios ─────────────────────────────────────────────
-        from domain.services.auth_service       import AuthService
-        from domain.services.product_service    import ProductService
-        from domain.services.category_service   import CategoryService
-        from domain.services.event_service      import EventService
-        from domain.services.analytics_service  import AnalyticsService
-        from domain.services.ticket_service     import TicketService
-        from domain.services.inventory_service  import InventoryService   # NUEVO Fase 5
-        from domain.services.sale_service       import SaleService
-        from domain.services.recharge_service   import RechargeService    # NUEVO Fase 6
-
-        auth_svc      = AuthService(auth_repo, tenant_repo)
-        product_svc   = ProductService(product_repo)
-        category_svc  = CategoryService(category_repo)
-        event_svc     = EventService(event_repo)
-        analytics_svc = AnalyticsService(analytics_repo)
-        ticket_svc    = TicketService(ticket_repo=ticket_repo,
-                                      event_service=event_svc)
-
-        # NUEVO Fase 5: InventoryService con eventos para alertas de stock
-        inventory_svc = InventoryService(
-            inventory_repo=inventory_repo,
-            event_service=event_svc,
-        )
-
-        # CAMBIO Fase 5: SaleService ahora usa inventory_service
-        sale_svc = SaleService(
-            sale_repo=sale_repo,
-            event_service=event_svc,
-            inventory_service=inventory_svc,       # NUEVO — reemplaza inventory_repo
-        )
-
-        # NUEVO Fase 6: RechargeService (mock, sin recharge_repo aún)
-        recharge_svc = RechargeService(event_service=event_svc)
-
-        # ── Use Cases ─────────────────────────────────────────────
-        from application.use_cases.create_sale_use_case   import CreateSaleUseCase
-        from application.use_cases.register_user_use_case import RegisterUserUseCase
-
-        create_sale_use_case  = CreateSaleUseCase(sale_repo, inventory_svc, event_svc)
-        register_use_case     = RegisterUserUseCase(auth_repo, tenant_repo)
-
-        # ── Controladores ─────────────────────────────────────────
-        from application.controllers.auth_controller       import AuthController
-        from application.controllers.product_controller    import ProductController
-        from application.controllers.category_controller   import CategoryController
-        from application.controllers.sale_controller       import SaleController
-        from application.controllers.analytics_controller  import AnalyticsController
-        from application.controllers.inventory_controller  import InventoryController  # NUEVO
-        from application.controllers.recharge_controller   import RechargeController   # NUEVO
-
-        self.auth_controller      = AuthController(auth_svc, self, register_use_case)
-        self.product_controller   = ProductController(product_svc, self)
-        self.category_controller  = CategoryController(category_svc, self)
-        self.sale_controller      = SaleController(sale_svc, self, create_sale_use_case)
-        self.analytics_controller = AnalyticsController(analytics_svc)
-        self.ticket_service       = ticket_svc
-        self.inventory_controller = InventoryController(inventory_svc, self)  # NUEVO
-        self.recharge_controller  = RechargeController(recharge_svc, self)    # NUEVO
+        from presentation.container import ServiceContainer
+ 
+        container = ServiceContainer()
+        container.set_app(self)
+        container.wire()
+        # Controllers expuestos como atributos de App
+        # (las vistas los reciben por inyección — no cambia nada en ellas)
+        self.auth_controller      = container.get("auth_controller")
+        self.product_controller   = container.get("product_controller")
+        self.category_controller  = container.get("category_controller")
+        self.sale_controller      = container.get("sale_controller")
+        self.analytics_controller = container.get("analytics_controller")
+        self.ticket_service       = container.get("ticket_service")
+        self.inventory_controller = container.get("inventory_controller")
+        self.recharge_controller  = container.get("recharge_controller")
+ 
+        # Guardar referencia al container para consultas dinámicas (Fase 7+)
+        self._container = container
 
     # ─── Navegación ───────────────────────────────────────────────
     def navigate_to(self, route: str):
@@ -172,6 +107,11 @@ class App:
             view = RegisterView(self.page, colors, self.is_dark,
                                 self.auth_controller, self)
             self._set_content(view.build())
+            return
+
+        from session.session import Session
+        if not Session.is_authenticated():
+            self._render("login")
             return
 
         # NUEVO Fase 5: consultar alertas para sidebar

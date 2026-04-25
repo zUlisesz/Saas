@@ -45,7 +45,7 @@ class CreateProductUseCase:
         # Inicializar stock (fire & forget)
         if self.inventory_service:
             try:
-                self.inventory_service.initialize_stock(
+                self.inventory_service.init_stock(
                     product_id,
                     stock_inicial=int(data.get("stock_inicial", 0)),
                     stock_minimo=int(data.get("stock_minimo", 5)),

@@ -280,8 +280,9 @@ class PosView:
         else:
             self.app.show_snackbar(f"Código '{barcode}' no encontrado", error=True) #type: ignore
 
-        # Limpiar el campo para el siguiente scan
+        # Limpiar y re-enfocar para escaneo continuo
         self._barcode_field.value = ""
+        self._barcode_field.focus()
         self.page.update()
 
     # ─────────────────────────────────────────────────────────────
@@ -294,10 +295,14 @@ class PosView:
 
     def _on_search(self, e):
         q = (self._search_field.value or "").lower().strip()
-        self.filtered_products = (
-            [p for p in self.all_products if q in p.get("name", "").lower()] if q
-            else list(self.all_products)
-        )
+        if q:
+            self.filtered_products = [
+                p for p in self.all_products
+                if q in p.get("name", "").lower()
+                or q in (p.get("barcode") or "").lower()
+            ]
+        else:
+            self.filtered_products = list(self.all_products)
         self._render_products()
 
     def _render_products(self):
@@ -329,12 +334,20 @@ class PosView:
                             text_align=ft.TextAlign.CENTER),
                     ft.Text(f"${price:,.2f}", size=15, weight=ft.FontWeight.BOLD,
                             color=AppTheme.ACCENT, text_align=ft.TextAlign.CENTER),
-                    # NUEVO Fase 4: mostrar barcode si existe
-                    ft.Text(
-                        barcode[:12] if barcode else "",
-                        size=9, color=c["text_secondary"],
+                    # NUEVO Fase 4: badge de barcode o aviso PENDING
+                    ft.Container(
+                        content=ft.Text(
+                            "Sin código", size=9, color=AppTheme.ERROR,
+                            weight=ft.FontWeight.W_600,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        bgcolor=f"{AppTheme.ERROR}20",
+                        border_radius=6,
+                        padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                    ) if (not barcode or barcode.startswith("PENDING-")) else ft.Text(
+                        barcode[:13], size=9, color=c["text_secondary"],
                         font_family="monospace", text_align=ft.TextAlign.CENTER,
-                    ) if barcode else ft.Container(height=0),
+                    ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER, spacing=5,
