@@ -109,6 +109,11 @@ class App:
             self._set_content(view.build())
             return
 
+        from session.session import Session
+        if not Session.is_authenticated():
+            self._render("login")
+            return
+
         # NUEVO Fase 5: consultar alertas para sidebar
         has_low_stock = False
         try:

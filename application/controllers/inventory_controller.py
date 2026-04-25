@@ -33,6 +33,9 @@
 # PRINCIPIO: ninguna lógica de negocio aquí.
 # Cada método = try/except + delegar al servicio + snackbar si falla.
 
+from domain.exceptions import AuthenticationError
+
+
 class InventoryController:
 
     def __init__(self, service, app, alert_service=None):
@@ -93,6 +96,9 @@ class InventoryController:
             # Regenerar alertas tras el ajuste
             self.generate_alerts()
             return True
+        except AuthenticationError:
+            self.app.navigate_to("login")
+            return False
         except Exception as ex:
             self.app.show_snackbar(str(ex), error=True)
             return False
