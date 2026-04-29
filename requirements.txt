@@ -2,3 +2,4 @@ flet>=0.21.0
 supabase>=2.4.0
 python-dotenv>=1.0.0
 fpdf2>=2.7.0          # Fase 3 — generación de tickets PDF (TicketService)
+apscheduler>=3.10.0   # Fase 5 — job scheduler para alertas de inventario automáticas
