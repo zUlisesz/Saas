@@ -285,6 +285,16 @@ class ServiceContainer:
             "application.controllers.recharge_controller", "RechargeController"
         )(self.get("recharge_service"), self._app_ref()))
 
+        # ── Schedulers ────────────────────────────────────────────────
+
+        self.register("inventory_alert_scheduler", lambda: self._import(
+            "infrastructure.schedulers.inventory_scheduler",
+            "create_inventory_alert_scheduler",
+        )(
+            inventory_controller=self.get("inventory_controller"),
+            interval_minutes=15,
+        ))
+
         self._wired = True
         return self
 

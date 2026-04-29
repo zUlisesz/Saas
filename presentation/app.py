@@ -24,6 +24,9 @@
 
 import flet as ft
 from presentation.theme import AppTheme
+from infrastructure.logging_config import get_logger
+
+_log = get_logger(__name__)
 
 
 class App:
@@ -69,9 +72,18 @@ class App:
         self.ticket_service       = container.get("ticket_service")
         self.inventory_controller = container.get("inventory_controller")
         self.recharge_controller  = container.get("recharge_controller")
- 
+
         # Guardar referencia al container para consultas dinámicas (Fase 7+)
         self._container = container
+
+        # Fase 5 — Iniciar scheduler de alertas de inventario
+        try:
+            self.inventory_alert_scheduler = container.get("inventory_alert_scheduler")
+            self.inventory_alert_scheduler.start()
+            _log.info("✓ InventoryAlertScheduler iniciado (interval: 15 min)")
+        except Exception as e:
+            _log.error(f"Error al iniciar InventoryAlertScheduler: {e}", exc_info=True)
+            # Degradación elegante — alertas on-demand desde la UI siguen funcionando
 
     # ─── Navegación ───────────────────────────────────────────────
     def navigate_to(self, route: str):
