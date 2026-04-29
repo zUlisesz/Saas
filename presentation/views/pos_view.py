@@ -20,6 +20,7 @@
 # PRINCIPIO: pos_view recibe los controllers inyectados.
 # Nunca instancia servicios ni repositorios directamente.
 
+import threading
 import flet as ft
 from presentation.theme import AppTheme
 
@@ -42,6 +43,9 @@ class PosView:
         self.cart:              list[dict] = []
         self.all_products:      list[dict] = []
         self.filtered_products: list[dict] = []
+
+        self._search_timer:    threading.Timer | None = None
+        self._cart_item_refs:  dict = {}  # pid -> {"qty": ft.Text, "sub": ft.Text}
 
         self._cart_col       = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=8, expand=True)
         self._total_text     = ft.Text("$0.00", size=26, weight=ft.FontWeight.BOLD, color="white")
@@ -184,9 +188,9 @@ class PosView:
             self.page.update()
 
         def select_amount(amount: int):
-            selected_amount["value"] = amount
+            selected_amount["value"] = amount #type: ignore
             amount_label.value = f"Monto seleccionado: ${amount}"
-            self.page.update()
+            amount_label.update()
 
         def on_recharge(e):
             op_id  = selected_operator.current.value if selected_operator.current else None
@@ -289,20 +293,44 @@ class PosView:
     # Products
     # ─────────────────────────────────────────────────────────────
     def _load_products(self):
-        self.all_products      = self.product_controller.get_products()
-        self.filtered_products = list(self.all_products)
-        self._render_products()
+        self._product_grid.controls.clear()
+        self._product_grid.controls.append(
+            ft.Container(
+                content=ft.Column([
+                    ft.ProgressRing(width=24, height=24, stroke_width=2,
+                                    color=AppTheme.ACCENT),
+                    ft.Text("Cargando productos...", size=12,
+                            color=self.colors["text_secondary"]),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+                alignment=ft.alignment.center, expand=True,
+            )
+        )
+        self.page.update()
+
+        def fetch():
+            products = self.product_controller.get_products()
+            self.all_products      = products
+            self.filtered_products = list(products)
+            self._render_products()
+
+        threading.Thread(target=fetch, daemon=True).start()
 
     def _on_search(self, e):
-        q = (self._search_field.value or "").lower().strip()
-        if q:
-            self.filtered_products = [
-                p for p in self.all_products
-                if q in p.get("name", "").lower()
-                or q in (p.get("barcode") or "").lower()
-            ]
-        else:
-            self.filtered_products = list(self.all_products)
+        if self._search_timer:
+            self._search_timer.cancel()
+        value = e.control.value
+        self._search_timer = threading.Timer(0.25, self._do_search, args=[value])
+        self._search_timer.daemon = True
+        self._search_timer.start()
+
+    def _do_search(self, value: str):
+        q = (value or "").lower().strip()
+        self.filtered_products = (
+            [p for p in self.all_products
+             if q in p.get("name", "").lower()
+             or q in (p.get("barcode") or "").lower()]
+            if q else list(self.all_products)
+        )
         self._render_products()
 
     def _render_products(self):
@@ -445,7 +473,20 @@ class PosView:
             if item["id"] == product_id:
                 item["quantity"] = max(1, item["quantity"] + delta)
                 item["subtotal"] = item["quantity"] * item["price"]
-        self._refresh_cart()
+                refs = self._cart_item_refs.get(product_id)
+                if refs:
+                    refs["qty"].value = str(item["quantity"])
+                    refs["sub"].value = f"${item['subtotal']:,.2f}"
+                break
+        self._update_totals()
+
+    def _update_totals(self):
+        total = sum(i["subtotal"] for i in self.cart)
+        count = sum(i["quantity"] for i in self.cart)
+        self._total_text.value      = f"${total:,.2f}"
+        self._subtotal_text.value   = f"Subtotal: ${total:,.2f}"
+        self._item_count_text.value = f"{count} ítem{'s' if count != 1 else ''}"
+        self.page.update()
 
     def _clear_cart(self, e=None):
         self.cart.clear()
@@ -453,6 +494,7 @@ class PosView:
 
     def _refresh_cart(self):
         c = self.colors
+        self._cart_item_refs.clear()
         self._cart_col.controls.clear()
 
         if not self.cart:
@@ -481,7 +523,13 @@ class PosView:
         self.page.update()
 
     def _cart_item_row(self, item: dict):
-        c = self.colors
+        c        = self.colors
+        qty_text = ft.Text(str(item["quantity"]), size=13, weight=ft.FontWeight.BOLD,
+                           color=c["text"], width=20, text_align=ft.TextAlign.CENTER)
+        sub_text = ft.Text(f"${item['subtotal']:,.2f}", size=13,
+                           weight=ft.FontWeight.BOLD, color=AppTheme.ACCENT)
+        self._cart_item_refs[item["id"]] = {"qty": qty_text, "sub": sub_text}
+
         return ft.Container(
             content=ft.Row([
                 ft.Column([
@@ -498,8 +546,7 @@ class PosView:
                         icon_color=c["text_secondary"],
                         style=ft.ButtonStyle(padding=ft.padding.all(4)),
                     ),
-                    ft.Text(str(item["quantity"]), size=13, weight=ft.FontWeight.BOLD,
-                            color=c["text"], width=20, text_align=ft.TextAlign.CENTER),
+                    qty_text,
                     ft.IconButton(
                         ft.icons.ADD_ROUNDED, icon_size=14,
                         on_click=lambda e, pid=item["id"]: self._update_quantity(pid, 1),
@@ -508,8 +555,7 @@ class PosView:
                     ),
                 ], spacing=0, tight=True),
                 ft.Column([
-                    ft.Text(f"${item['subtotal']:,.2f}", size=13,
-                            weight=ft.FontWeight.BOLD, color=AppTheme.ACCENT),
+                    sub_text,
                     ft.IconButton(
                         ft.icons.CLOSE_ROUNDED, icon_size=14,
                         on_click=lambda e, pid=item["id"]: self._remove_from_cart(pid),
@@ -548,7 +594,7 @@ class PosView:
                 change_text.color = AppTheme.SUCCESS if change >= 0 else AppTheme.ERROR
             except ValueError:
                 change_text.value = "Cambio: $0.00"
-            self.page.update()
+            change_text.update()
 
         amount_field.on_change = on_amount_change
 

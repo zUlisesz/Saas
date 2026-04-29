@@ -55,9 +55,13 @@ class InventoryAlertService:
     def _get_user_id(self) -> str:
         """Retorna el user_id de la sesión activa o None si no hay."""
         user = getattr(Session, "current_user", None)
-        if user and isinstance(user, dict):
-            return user.get("id") #type: ignore
-        return None #type: ignore
+        if not user:
+            return None  # type: ignore
+        if hasattr(user, "id"):
+            return user.id
+        if isinstance(user, dict):
+            return user.get("id")  # type: ignore
+        return None  # type: ignore
 
     # ------------------------------------------------------------------ #
     # LECTURA                                                             #

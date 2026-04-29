@@ -7,6 +7,7 @@
 #   AHORA: visible=True     → siempre visible
 #   Para nuevos productos usa uuid4() como seed → EAN-13 válido.
 
+import threading
 import flet as ft
 import uuid as _uuid
 from presentation.theme import AppTheme
@@ -24,6 +25,7 @@ class ProductsView:
         self.app             = app
         self._products:   list[dict] = []
         self._categories: list[dict] = []
+        self._filter_timer: threading.Timer | None = None
         self._table_rows = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO, expand=True)
 
     def build(self):
@@ -212,6 +214,13 @@ class ProductsView:
         self.page.update()
 
     def _filter(self, query: str):
+        if self._filter_timer:
+            self._filter_timer.cancel()
+        self._filter_timer = threading.Timer(0.25, self._do_filter, args=[query])
+        self._filter_timer.daemon = True
+        self._filter_timer.start()
+
+    def _do_filter(self, query: str):
         q = (query or "").lower().strip()
         filtered = (
             [p for p in self._products

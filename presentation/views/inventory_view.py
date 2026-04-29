@@ -517,7 +517,6 @@ class InventoryView:
                                         notas_f.value or "")
             if ok:
                 dialog.open = False
-                self.page.update()
                 self._load_data()
                 self._render_inventory_rows()
                 self._render_alert_rows()
@@ -612,7 +611,6 @@ class InventoryView:
             )
             if ok:
                 dialog.open = False
-                self.page.update()
                 self._load_data()
                 self._render_inventory_rows()
                 self.page.update()
