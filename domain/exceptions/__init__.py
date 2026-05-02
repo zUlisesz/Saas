@@ -119,3 +119,47 @@ class RepositoryError(NexaPOSError):
     Los controladores deben mostrar un mensaje genérico y loggear el detalle.
     """
     pass
+
+
+# ─── Recargas Electrónicas ────────────────────────────────────────────────────
+
+class InvalidPhoneError(ValidationError):
+    """Número de teléfono inválido (formato o longitud incorrecta)."""
+    def __init__(self, message: str = "El número debe tener entre 8 y 12 dígitos"):
+        super().__init__("phone", message)
+
+
+class InvalidOperatorError(ValidationError):
+    """Operador de telefonía no reconocido en el catálogo."""
+    def __init__(self, message: str = "Operador no válido"):
+        super().__init__("operator", message)
+
+
+class InvalidAmountError(ValidationError):
+    """Monto de recarga fuera del rango permitido (Bs 10 – Bs 1000)."""
+    def __init__(self, message: str = "El monto debe estar entre Bs 10.0 y Bs 1000.0"):
+        super().__init__("amount", message)
+
+
+class RechargeProviderError(Exception):
+    """
+    Fallo en el proveedor externo de recargas (API caída, respuesta inesperada).
+    Hereda de Exception directamente porque es un error de integración externa,
+    no una violación de reglas de dominio.
+    """
+    pass
+
+
+class RechargeTimeoutError(RechargeProviderError):
+    """El proveedor externo no respondió dentro del tiempo límite."""
+    pass
+
+
+class DuplicateRechargeError(Exception):
+    """
+    Se intentó registrar una recarga con un external_tx_id ya existente.
+    Indica un reintento duplicado — la recarga original ya fue procesada.
+    """
+    def __init__(self, external_tx_id: str):
+        self.external_tx_id = external_tx_id
+        super().__init__(f"La transacción '{external_tx_id}' ya fue registrada")

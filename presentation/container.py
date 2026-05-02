@@ -158,6 +158,10 @@ class ServiceContainer:
             "infrastructure.repositories.ticket_repository", "TicketRepository"
         )())
 
+        self.register("recharge_repo", lambda: self._import(
+            "infrastructure.repositories.recharge_repository", "RechargeRepository"
+        )())
+
         # ── Servicios ─────────────────────────────────────────────────
 
         self.register("auth_service", lambda: self._import(
@@ -215,7 +219,10 @@ class ServiceContainer:
         # Fase 6: RechargeService
         self.register("recharge_service", lambda: self._import(
             "domain.services.recharge_service", "RechargeService"
-        )(event_service=self.get("event_service")))
+        )(
+            event_service=self.get("event_service"),
+            recharge_repo=self.get("recharge_repo"),
+        ))
 
         # ── Use Cases ─────────────────────────────────────────────────
 
