@@ -82,6 +82,7 @@ class InventoryView:
 
         # Ref al badge de alertas para actualizar sin rebuild completo
         self._alert_badge_ref = ft.Ref[ft.Text]()
+        self._tabs_ctrl: ft.Tabs | None = None
 
     # ================================================================== #
     # Build                                                               #
@@ -103,7 +104,7 @@ class InventoryView:
 
         # TabBar
         alert_count = summary.get("total_new", 0)
-        tabs = ft.Tabs(
+        self._tabs_ctrl = ft.Tabs(
             selected_index=self._tab_idx,
             animation_duration=200,
             on_change=self._on_tab_change,
@@ -131,7 +132,7 @@ class InventoryView:
                     action=refresh_btn,
                 ),
                 ft.Container(height=12),
-                tabs,
+                self._tabs_ctrl,
             ], expand=True),
             expand=True,
             padding=ft.padding.all(28),
@@ -272,14 +273,15 @@ class InventoryView:
                     ft.Text(f"{stock_min} / {stock_max}", size=12,
                             color=c["text_secondary"], expand=2),
 
-                    # Badge de estado
-                    ft.Container(
-                        content=ft.Text(status_text, size=11, color="white"),
-                        bgcolor=status_color,
-                        border_radius=20,
-                        padding=ft.padding.symmetric(horizontal=10, vertical=3),
-                        expand=1,
-                    ),
+                    # Badge de estado — Row wrapper evita que el badge se estire
+                    ft.Row([
+                        ft.Container(
+                            content=ft.Text(status_text, size=11, color="white"),
+                            bgcolor=status_color,
+                            border_radius=20,
+                            padding=ft.padding.symmetric(horizontal=10, vertical=3),
+                        ),
+                    ], expand=1),
 
                     # Acciones
                     ft.Row([
@@ -308,7 +310,11 @@ class InventoryView:
 
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.padding.symmetric(horizontal=16, vertical=10),
-                bgcolor=f"{AppTheme.WARNING}08" if is_problem else "transparent",
+                bgcolor=(
+                    f"{AppTheme.ERROR}0D" if status_key == "out_of_stock"
+                    else f"{AppTheme.WARNING}0D" if status_key == "low"
+                    else "transparent"
+                ),
                 border=ft.border.only(
                     bottom=ft.border.BorderSide(1, c["divider"]),
                     left=ft.border.BorderSide(
@@ -395,14 +401,15 @@ class InventoryView:
 
             row = ft.Container(
                 content=ft.Row([
-                    # Tipo badge
-                    ft.Container(
-                        content=ft.Text(type_text, size=11, color="white"),
-                        bgcolor=type_color,
-                        border_radius=20,
-                        padding=ft.padding.symmetric(horizontal=10, vertical=3),
-                        expand=1,
-                    ),
+                    # Tipo badge — Row wrapper evita que el badge se estire
+                    ft.Row([
+                        ft.Container(
+                            content=ft.Text(type_text, size=11, color="white"),
+                            bgcolor=type_color,
+                            border_radius=20,
+                            padding=ft.padding.symmetric(horizontal=10, vertical=3),
+                        ),
+                    ], expand=1),
 
                     # Producto
                     ft.Text(product_name, size=13, color=c["text"], expand=3,
@@ -442,8 +449,10 @@ class InventoryView:
 
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.padding.symmetric(horizontal=16, vertical=10),
+                bgcolor=f"{type_color}0D",
                 border=ft.border.only(
                     bottom=ft.border.BorderSide(1, c["divider"]),
+                    left=ft.border.BorderSide(3, type_color),
                 ),
             )
             self._alert_col.controls.append(row)
@@ -453,7 +462,6 @@ class InventoryView:
     # ================================================================== #
 
     def _build_alert_banner(self, summary: dict) -> ft.Container:
-        c         = self.colors
         total     = summary.get("total_new", 0)
         critical  = summary.get("critical", 0)
         warning   = summary.get("warning", 0)
@@ -791,11 +799,8 @@ class InventoryView:
         self._tab_idx = e.control.selected_index
 
     def _switch_to_alerts_tab(self):
-        """Desde el banner, navega al tab de Alertas."""
+        """Desde el banner, cambia al tab de Alertas directamente."""
         self._tab_idx = 1
-        # Rebuild completo para reflejar el tab activo
-        # (Flet no expone set_selected_index sin rebuild)
-        new_content = self.build()
-        # La vista se reemplaza vía app.navigate_to si existe el método,
-        # de lo contrario el usuario puede hacer clic en el tab directamente.
-        self.page.update()
+        if self._tabs_ctrl is not None:
+            self._tabs_ctrl.selected_index = 1
+            self._tabs_ctrl.update()
