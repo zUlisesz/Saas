@@ -10,7 +10,10 @@
       "Bash(xargs cat *)",
       "PowerShell(New-Item -ItemType Directory -Path \"c:\\\\Users\\\\Roselia\\\\Desktop\\\\proyectos\\\\Saas\\\\infrastructure\\\\external\" -Force)",
       "mcp__claude_ai_Supabase__execute_sql",
-      "PowerShell(New-Item -ItemType Directory -Path \"c:\\\\Users\\\\Roselia\\\\Desktop\\\\proyectos\\\\Saas\\\\domain\\\\ports\" -Force)"
+      "PowerShell(New-Item -ItemType Directory -Path \"c:\\\\Users\\\\Roselia\\\\Desktop\\\\proyectos\\\\Saas\\\\domain\\\\ports\" -Force)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Roselia\\\\Desktop\\\\proyectos\\\\Saas\" -Recurse -Filter \"*controller*\" -Directory)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(python -m pytest tests/unit/test_recharge_service.py tests/unit/test_recharge_provider_mock.py -v)"
     ]
   }
 }

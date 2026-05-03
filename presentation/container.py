@@ -250,6 +250,14 @@ class ServiceContainer:
             self.get("event_service"),
         ))
 
+        self.register("process_recharge_use_case", lambda: self._import(
+            "application.use_cases.process_recharge_use_case",
+            "ProcessRechargeUseCase",
+        )(
+            recharge_service=self.get("recharge_service"),
+            event_service=self.get("event_service"),
+        ))
+
         # ── Controllers ───────────────────────────────────────────────
 
         self.register("auth_controller", lambda: self._import(
