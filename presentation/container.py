@@ -302,7 +302,11 @@ class ServiceContainer:
 
         self.register("recharge_controller", lambda: self._import(
             "application.controllers.recharge_controller", "RechargeController"
-        )(self.get("recharge_service"), self._app_ref()))
+        )(
+            service=self.get("recharge_service"),
+            app=self._app_ref(),
+            use_case=self.get("process_recharge_use_case"),
+        ))
 
         # ── Schedulers ────────────────────────────────────────────────
 

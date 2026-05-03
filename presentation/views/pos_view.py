@@ -195,7 +195,7 @@ class PosView:
             amount_label.value = f"Monto seleccionado: ${amount}"
             op_id = selected_operator.current.value if selected_operator.current else None
             if op_id and self.recharge_ctrl:
-                comm = self.recharge_ctrl.service.estimate_commission(op_id, float(amount))
+                comm = self.recharge_ctrl.get_commission_estimate(op_id, float(amount))
                 commission_label.value = f"Ganancia estimada: Bs {comm:.2f}"
             else:
                 commission_label.value = ""
@@ -216,11 +216,14 @@ class PosView:
             if not phone:
                 self.app.show_snackbar("Ingresa el número de teléfono", error=True)  # type: ignore
                 return
+            if not self.recharge_ctrl.is_valid_phone(phone):
+                self.app.show_snackbar("Número inválido: debe tener 8-12 dígitos", error=True)  # type: ignore
+                return
 
             operator_name = next(
                 (op["name"] for op in operators if op["id"] == op_id), op_id
             )
-            commission = self.recharge_ctrl.service.estimate_commission(op_id, float(amount))
+            commission = self.recharge_ctrl.get_commission_estimate(op_id, float(amount))
 
             def reset_form():
                 phone_field.value        = ""
@@ -268,9 +271,10 @@ class PosView:
             ink=True,
         )
 
-        # Carga inicial del historial (sin page.update — es el render inicial)
+        # Carga inicial del historial en background — evita bloquear el hilo de UI
+        # y previene conflictos de conexión con operaciones Supabase en curso.
         if self.recharge_ctrl:
-            self._fill_recharge_history()
+            threading.Thread(target=self._async_load_recharge_history, daemon=True).start()
 
         return ft.Column(
             [
@@ -382,15 +386,20 @@ class PosView:
     # ─────────────────────────────────────────────────────────────
     # NUEVO Fase 6 — Historial de recargas
     # ─────────────────────────────────────────────────────────────
+    def _async_load_recharge_history(self):
+        """Carga inicial del historial en background thread."""
+        self._fill_recharge_history()
+        try:
+            self._recharge_history_col.update()
+        except Exception:
+            pass
+
     def _fill_recharge_history(self):
         """Reconstruye controles del historial. No llama page.update()."""
         c = self.colors
         self._recharge_history_col.controls.clear()
 
-        try:
-            history = self.recharge_ctrl.service.get_history(limit=10)
-        except Exception:
-            history = []
+        history = self.recharge_ctrl.get_history(limit=10)
 
         if not history:
             self._recharge_history_col.controls.append(
