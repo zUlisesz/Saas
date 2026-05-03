@@ -216,12 +216,16 @@ class ServiceContainer:
             inventory_service=self.get("inventory_service"),
         ))
 
-        # Fase 6: RechargeService
-        self.register("recharge_service", lambda: self._import(
-            "domain.services.recharge_service", "RechargeService"
+        # Fase 6: RechargeService — provider inyectado (Mock en dev, Real en prod)
+        self.register("recharge_service", lambda: (
+            lambda RechargeService, MockProvider: RechargeService(
+                provider=MockProvider(),
+                recharge_repo=self.get("recharge_repo"),
+                event_service=self.get("event_service"),
+            )
         )(
-            event_service=self.get("event_service"),
-            recharge_repo=self.get("recharge_repo"),
+            self._import("domain.services.recharge_service",   "RechargeService"),
+            self._import("infrastructure.external.recharge_provider_mock", "MockRechargeProvider"),
         ))
 
         # ── Use Cases ─────────────────────────────────────────────────

@@ -121,45 +121,49 @@ class RepositoryError(NexaPOSError):
     pass
 
 
-# ─── Recargas Electrónicas ────────────────────────────────────────────────────
+# ─── Recargas Electrónicas (Fase 6) ──────────────────────────────────────────
 
 class InvalidPhoneError(ValidationError):
-    """Número de teléfono inválido (formato o longitud incorrecta)."""
-    def __init__(self, message: str = "El número debe tener entre 8 y 12 dígitos"):
-        super().__init__("phone", message)
-
-
-class InvalidOperatorError(ValidationError):
-    """Operador de telefonía no reconocido en el catálogo."""
-    def __init__(self, message: str = "Operador no válido"):
-        super().__init__("operator", message)
+    """Número de teléfono con formato o longitud inválida."""
+    def __init__(self):
+        super().__init__("phone", "El número debe tener entre 8 y 12 dígitos")
 
 
 class InvalidAmountError(ValidationError):
-    """Monto de recarga fuera del rango permitido (Bs 10 – Bs 1000)."""
-    def __init__(self, message: str = "El monto debe estar entre Bs 10.0 y Bs 1000.0"):
-        super().__init__("amount", message)
+    """Monto de recarga fuera del rango permitido."""
+    def __init__(self, min_val: float, max_val: float):
+        super().__init__("amount",
+            f"El monto debe estar entre Bs {min_val} y Bs {max_val}")
 
 
-class RechargeProviderError(Exception):
+class InvalidOperatorError(ValidationError):
+    """Operadora de telefonía no reconocida en el catálogo."""
+    def __init__(self, operators: list):
+        super().__init__("operator",
+            f"Operador no válido. Opciones: {operators}")
+
+
+class RechargeProviderError(NexaPOSError):
     """
-    Fallo en el proveedor externo de recargas (API caída, respuesta inesperada).
-    Hereda de Exception directamente porque es un error de integración externa,
-    no una violación de reglas de dominio.
+    Fallo externo del proveedor de recargas (API caída, respuesta inesperada).
+    Hereda de NexaPOSError — no de ValidationError ni BusinessRuleError —
+    porque es un fallo del sistema externo, no del usuario.
+    Los controllers lo capturan con except NexaPOSError o except RechargeProviderError.
     """
     pass
 
 
 class RechargeTimeoutError(RechargeProviderError):
-    """El proveedor externo no respondió dentro del tiempo límite."""
-    pass
+    """La API del proveedor no respondió dentro del tiempo límite."""
+    def __init__(self):
+        super().__init__("Tiempo de espera agotado. Intente de nuevo.")
 
 
-class DuplicateRechargeError(Exception):
+class DuplicateRechargeError(NexaPOSError):
     """
-    Se intentó registrar una recarga con un external_tx_id ya existente.
-    Indica un reintento duplicado — la recarga original ya fue procesada.
+    external_tx_id duplicado — probable reintento de doble cobro.
+    Hereda de NexaPOSError para ser capturable en el bloque genérico del controller.
     """
-    def __init__(self, external_tx_id: str):
-        self.external_tx_id = external_tx_id
-        super().__init__(f"La transacción '{external_tx_id}' ya fue registrada")
+    def __init__(self, ext_tx_id: str):
+        self.ext_tx_id = ext_tx_id
+        super().__init__(f"Transacción duplicada: {ext_tx_id}")
