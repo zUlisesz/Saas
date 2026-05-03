@@ -2,58 +2,51 @@
 #
 # Entidad de dominio: Recarga Electrónica.
 #
-# DECISIÓN: dataclass puro sin lógica de negocio.
-# Las reglas de validación viven en domain/specifications/recharge_specs.py.
-# La orquestación vive en domain/services/recharge_service.py.
+# DECISIONES:
+#   frozen=True: una entidad recuperada de BD es inmutable. Si el estado
+#   cambia (pending → success), el repo crea un nuevo objeto. Patrón
+#   consistente con el resto de modelos del proyecto.
+#
+#   UUID como str: Supabase los retorna como str. Convertir a uuid.UUID
+#   en el repo no agrega valor y complica el mapping.
+#
+#   created_at / completed_at como str: Supabase retorna ISO strings.
+#   La conversión a datetime es responsabilidad de la capa de presentación
+#   si la necesita para formatear — no del dominio.
+#
+#   is_terminal / is_successful son consultas de estado puro, sin
+#   dependencias externas. Aceptable en la entidad.
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 
-@dataclass
+@dataclass(frozen=True)
 class Recharge:
-    """Entidad que representa una recarga electrónica registrada."""
-    id:              str
-    tenant_id:       str
-    phone:           str
-    operator:        str
-    amount:          float
-    status:          str            # 'success' | 'failed' | 'pending'
-    external_tx_id:  Optional[str]  = None
-    created_at:      Optional[datetime] = None
+    """Espejo 1:1 de la tabla `recharges` en BD. Solo estructura + tipado."""
 
-    @classmethod
-    def from_dict(cls, data: dict) -> "Recharge":
-        """Construye la entidad desde un dict de Supabase."""
-        created_raw = data.get("created_at")
-        if isinstance(created_raw, str):
-            try:
-                created_at = datetime.fromisoformat(created_raw)
-            except ValueError:
-                created_at = None
-        else:
-            created_at = created_raw
+    id:                str
+    tenant_id:         str
+    phone:             str
+    operator:          str
+    amount:            float
+    currency:          str
+    status:            str               # pending | processing | success | failed | timeout
+    created_at:        str
+    created_by:        str
+    external_tx_id:    Optional[str]   = None
+    external_response: Optional[dict]  = None
+    error_code:        Optional[str]   = None
+    error_message:     Optional[str]   = None
+    completed_at:      Optional[str]   = None
 
-        return cls(
-            id=data["id"],
-            tenant_id=data["tenant_id"],
-            phone=data["phone"],
-            operator=data["operator"],
-            amount=float(data.get("amount", 0)),
-            status=data.get("status", "pending"),
-            external_tx_id=data.get("external_tx_id"),
-            created_at=created_at,
-        )
+    # ── Propiedades de estado (solo lectura, sin lógica de negocio) ───────
 
-    def to_dict(self) -> dict:
-        return {
-            "id":             self.id,
-            "tenant_id":      self.tenant_id,
-            "phone":          self.phone,
-            "operator":       self.operator,
-            "amount":         self.amount,
-            "status":         self.status,
-            "external_tx_id": self.external_tx_id,
-            "created_at":     self.created_at.isoformat() if self.created_at else None,
-        }
+    @property
+    def is_terminal(self) -> bool:
+        """True si el status ya no puede cambiar (success | failed | timeout)."""
+        return self.status in ('success', 'failed', 'timeout')
+
+    @property
+    def is_successful(self) -> bool:
+        return self.status == 'success'
