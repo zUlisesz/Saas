@@ -46,6 +46,7 @@ class PosView:
 
         self._search_timer:    threading.Timer | None = None
         self._cart_item_refs:  dict = {}  # pid -> {"qty": ft.Text, "sub": ft.Text}
+        self._recharge_history_col = ft.Column(spacing=4)  # Fase 6
 
         self._cart_col       = ft.Column(scroll=ft.ScrollMode.AUTO, spacing=8, expand=True)
         self._total_text     = ft.Text("$0.00", size=26, weight=ft.FontWeight.BOLD, color="white")
@@ -155,25 +156,28 @@ class PosView:
         c         = self.colors
         operators = self.recharge_ctrl.get_operators() if self.recharge_ctrl else []
 
-        # Estado local de la tab (refs)
+        # Estado local de la tab (refs mutables)
         selected_operator = ft.Ref[ft.Dropdown]()
         phone_field       = AppTheme.make_text_field(
             "Número de teléfono (10 dígitos)", colors=c
         )
-        amounts_row       = ft.Row(wrap=True, spacing=8, run_spacing=8)
-        selected_amount   = {"value": None}  # mutable container
-        amount_label      = ft.Text("", size=14, color=c["text_secondary"])
+        amounts_row      = ft.Row(wrap=True, spacing=8, run_spacing=8)
+        selected_amount  = {"value": None}
+        amount_label     = ft.Text("", size=14, color=c["text_secondary"])
+        commission_label = ft.Text("", size=12, color=AppTheme.SUCCESS,
+                                   weight=ft.FontWeight.W_600)
 
         def on_operator_change(e):
             op_id   = selected_operator.current.value
             amounts = self.recharge_ctrl.get_amounts_for(op_id) if op_id else []
             amounts_row.controls.clear()
             selected_amount["value"] = None
-            amount_label.value = "Selecciona un monto"
+            amount_label.value       = "Selecciona un monto"
+            commission_label.value   = ""
 
             for amt in amounts:
                 def make_chip(a=amt):
-                    chip = ft.Container(
+                    return ft.Container(
                         content=ft.Text(f"${a}", size=13, weight=ft.FontWeight.W_600,
                                         color="white"),
                         gradient=AppTheme.gradient_primary(),
@@ -182,15 +186,21 @@ class PosView:
                         ink=True,
                         on_click=lambda e, amount=a: select_amount(amount),
                     )
-                    return chip
                 amounts_row.controls.append(make_chip())
 
             self.page.update()
 
         def select_amount(amount: int):
-            selected_amount["value"] = amount #type: ignore
+            selected_amount["value"] = amount  # type: ignore
             amount_label.value = f"Monto seleccionado: ${amount}"
+            op_id = selected_operator.current.value if selected_operator.current else None
+            if op_id and self.recharge_ctrl:
+                comm = self.recharge_ctrl.service.estimate_commission(op_id, float(amount))
+                commission_label.value = f"Ganancia estimada: Bs {comm:.2f}"
+            else:
+                commission_label.value = ""
             amount_label.update()
+            commission_label.update()
 
         def on_recharge(e):
             op_id  = selected_operator.current.value if selected_operator.current else None
@@ -198,22 +208,35 @@ class PosView:
             phone  = phone_field.value or ""
 
             if not op_id:
-                self.app.show_snackbar("Selecciona una operadora", error=True) #type: ignore
+                self.app.show_snackbar("Selecciona una operadora", error=True)  # type: ignore
                 return
             if not amount:
-                self.app.show_snackbar("Selecciona un monto", error=True) #type: ignore
+                self.app.show_snackbar("Selecciona un monto", error=True)  # type: ignore
                 return
             if not phone:
-                self.app.show_snackbar("Ingresa el número de teléfono", error=True) #type: ignore
+                self.app.show_snackbar("Ingresa el número de teléfono", error=True)  # type: ignore
                 return
 
-            result = self.recharge_ctrl.process_recharge(phone, op_id, amount)
-            if result:
-                # Limpiar formulario
-                phone_field.value = ""
+            operator_name = next(
+                (op["name"] for op in operators if op["id"] == op_id), op_id
+            )
+            commission = self.recharge_ctrl.service.estimate_commission(op_id, float(amount))
+
+            def reset_form():
+                phone_field.value        = ""
                 selected_amount["value"] = None
-                amount_label.value = "Selecciona un monto"
+                amount_label.value       = "Selecciona un monto"
+                commission_label.value   = ""
                 self.page.update()
+
+            self._show_recharge_confirmation(
+                phone=phone,
+                operator=op_id,
+                operator_name=operator_name,
+                amount=float(amount),
+                commission=commission,
+                on_success=reset_form,
+            )
 
         op_options = [
             ft.dropdown.Option(key=op["id"], text=op["name"])
@@ -245,6 +268,10 @@ class PosView:
             ink=True,
         )
 
+        # Carga inicial del historial (sin page.update — es el render inicial)
+        if self.recharge_ctrl:
+            self._fill_recharge_history()
+
         return ft.Column(
             [
                 ft.Text("Recarga Electrónica", size=16,
@@ -257,13 +284,162 @@ class PosView:
                 amounts_row,
                 ft.Container(height=4),
                 amount_label,
+                commission_label,
                 ft.Container(height=12),
                 phone_field,
                 ft.Container(height=16),
                 recharge_btn,
+                ft.Container(height=8),
+                ft.Divider(height=1),
+                ft.Container(height=8),
+                ft.Text("Últimas recargas", size=12, weight=ft.FontWeight.W_600,
+                        color=c["text_secondary"]),
+                ft.Container(height=4),
+                self._recharge_history_col,
             ],
             scroll=ft.ScrollMode.AUTO,
         )
+
+    # ─────────────────────────────────────────────────────────────
+    # NUEVO Fase 6 — Diálogo de confirmación de recarga
+    # ─────────────────────────────────────────────────────────────
+    def _show_recharge_confirmation(
+        self,
+        phone: str,
+        operator: str,
+        amount: float,
+        operator_name: str,
+        commission: float,
+        on_success=None,
+    ):
+        c = self.colors
+
+        def on_confirm(e):
+            dialog.open = False
+            self.page.update()
+            result = self.recharge_ctrl.process_recharge(phone, operator, amount)
+            if result:
+                if on_success:
+                    on_success()
+                self._refresh_recharge_history()
+
+        def on_cancel(e):
+            dialog.open = False
+            self.page.update()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.icons.PHONE_ANDROID_ROUNDED, color=AppTheme.ACCENT),
+                ft.Text("Confirmar Recarga", weight=ft.FontWeight.BOLD),
+            ], spacing=8),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text("Operadora:", size=13, color=c["text_secondary"]),
+                        ft.Text(operator_name, size=13, weight=ft.FontWeight.W_600,
+                                color=c["text"]),
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Row([
+                        ft.Text("Número:", size=13, color=c["text_secondary"]),
+                        ft.Text(phone, size=13, weight=ft.FontWeight.W_600,
+                                color=c["text"]),
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Row([
+                        ft.Text("Monto:", size=14, weight=ft.FontWeight.BOLD,
+                                color=c["text"]),
+                        ft.Text(f"Bs {amount:.2f}", size=14,
+                                weight=ft.FontWeight.BOLD, color=AppTheme.ACCENT),
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                    ft.Divider(height=8),
+                    ft.Row([
+                        ft.Text("Comisión estimada:", size=12,
+                                color=c["text_secondary"]),
+                        ft.Text(f"Bs {commission:.2f}", size=12,
+                                color=AppTheme.SUCCESS, weight=ft.FontWeight.W_600),
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ], spacing=10, tight=True),
+                width=320,
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=on_cancel),
+                ft.Container(
+                    content=ft.Text("Confirmar", color="white",
+                                    weight=ft.FontWeight.W_600),
+                    gradient=AppTheme.gradient_primary(),
+                    border_radius=8,
+                    padding=ft.padding.symmetric(horizontal=16, vertical=8),
+                    on_click=on_confirm,
+                    ink=True,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.dialog = dialog
+        dialog.open = True
+        self.page.update()
+
+    # ─────────────────────────────────────────────────────────────
+    # NUEVO Fase 6 — Historial de recargas
+    # ─────────────────────────────────────────────────────────────
+    def _fill_recharge_history(self):
+        """Reconstruye controles del historial. No llama page.update()."""
+        c = self.colors
+        self._recharge_history_col.controls.clear()
+
+        try:
+            history = self.recharge_ctrl.service.get_history(limit=10)
+        except Exception:
+            history = []
+
+        if not history:
+            self._recharge_history_col.controls.append(
+                ft.Text("Sin recargas aún", size=12, color=c["text_secondary"])
+            )
+            return
+
+        status_colors = {
+            "success": AppTheme.SUCCESS,
+            "failed":  AppTheme.ERROR,
+            "timeout": AppTheme.WARNING,
+        }
+
+        for item in history:
+            if isinstance(item, dict):
+                phone    = item.get("phone", "—")
+                operator = item.get("operator", "")
+                amount   = item.get("amount", 0)
+                status   = item.get("status", "")
+                label    = status
+            else:
+                phone    = item.phone
+                operator = item.operator
+                amount   = item.amount
+                status   = item.status
+                label    = item.status_label
+
+            self._recharge_history_col.controls.append(
+                ft.Container(
+                    content=ft.Row([
+                        ft.Text(phone, size=12, expand=True),
+                        ft.Text(str(operator).capitalize(), size=11,
+                                color=c["text_secondary"]),
+                        ft.Text(f"Bs {float(amount):.0f}", size=12,
+                                weight=ft.FontWeight.W_600, color=c["text"]),
+                        ft.Text(label, size=11,
+                                color=status_colors.get(status, c["text_secondary"])),
+                    ], spacing=8),
+                    padding=ft.padding.symmetric(vertical=4),
+                )
+            )
+
+    def _refresh_recharge_history(self):
+        """Refresca el historial tras una recarga. Llama page.update()."""
+        self._fill_recharge_history()
+        try:
+            self._recharge_history_col.update()
+        except Exception:
+            pass
 
     # ─────────────────────────────────────────────────────────────
     # NUEVO Fase 4 — Barcode scan
