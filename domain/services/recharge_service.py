@@ -1,88 +1,64 @@
 # domain/services/recharge_service.py
 #
-# NUEVA — Fase 6: Recargas Electrónicas
+# Fase 6: Servicio de Recargas Electrónicas.
 #
-# JUSTIFICACIÓN:
-# Las recargas son una fuente de ingresos adicional muy común en tiendas
-# de conveniencia en México. Este servicio implementa el mock inicial
-# (Fase 6, paso 1) para que la UI pueda integrarse de inmediato.
-# La integración con la API real (e.g. Multi, Telecard, Transfermóvil)
-# se añade en una fase posterior reemplazando solo _call_provider_api().
+# ARQUITECTURA — Patrón Adapter para el proveedor:
+#   El servicio recibe `provider` por inyección (MockRechargeProvider o
+#   RealRechargeProvider). Para pasar a producción solo cambia el container —
+#   este servicio, la vista y el controller no cambian.
 #
-# ESTRUCTURA:
-#   • OPERATORS: catálogo de operadoras y montos disponibles (no hardcoded en UI)
-#   • recharge(): orquesta validación → mock API → registro de evento
-#   • get_history(): historial de recargas del tenant
+# FLUJO DE process():
+#   1. Verifica sesión activa
+#   2. Delega validación a RechargeReady().enforce() → lanza excepción tipada si falla
+#   3. Crea registro en BD en estado 'pending' (_create_pending)
+#   4. Llama al proveedor (Mock o Real)
+#   5. Actualiza estado en BD (_complete)
+#   6. Emite evento recharge_completed (fire & forget)
+#   7. Retorna el resultado estándar
 #
-# PATRÓN:
-#   Idéntico al resto de servicios: recibe repos/services por inyección.
-#   La vista nunca sabe si la API es real o mock — solo ve el resultado.
-#
-# ESCALABILIDAD:
-#   Para conectar una API real, solo se modifica _call_provider_api().
-#   El resto del servicio, la vista y el controlador no cambian.
+# OPERADORAS (Bolivia — deben coincidir con CHECK constraint de la BD):
+#   movicel, comcel, viva, entel, tigo
 
-import uuid
 from datetime import datetime
 from session.session import Session
+from domain.specifications.recharge_specs import RechargeReady
+from domain.exceptions import RechargeTimeoutError, RechargeProviderError
 
 
 class RechargeService:
 
     # ------------------------------------------------------------------ #
-    # Catálogo de operadoras y montos (reglas de negocio, viven aquí)   #
+    # Catálogo de operadoras y montos (Bolivia)                          #
+    # IMPORTANTE: las claves deben coincidir con el CHECK constraint BD  #
     # ------------------------------------------------------------------ #
     OPERATORS = {
-        "telcel": {
-            "name":    "Telcel",
-            "amounts": [10, 20, 30, 50, 100, 150, 200, 300, 500],
-            "commission_pct": 0.03,   # 3% de comisión al negocio
-        },
-        "att": {
-            "name":    "AT&T",
-            "amounts": [10, 20, 30, 50, 100, 200, 300],
-            "commission_pct": 0.035,
-        },
-        "movistar": {
-            "name":    "Movistar",
-            "amounts": [20, 30, 50, 100, 150, 200],
-            "commission_pct": 0.03,
-        },
-        "unefon": {
-            "name":    "Unefon",
-            "amounts": [10, 20, 30, 50, 100],
-            "commission_pct": 0.04,
-        },
-        "virgin": {
-            "name":    "Virgin Mobile",
-            "amounts": [20, 50, 100, 200],
-            "commission_pct": 0.035,
-        },
+        "movicel": {"name": "Movicel", "amounts": [10, 20, 30, 50, 100, 200], "commission_pct": 0.03},
+        "comcel":  {"name": "Comcel",  "amounts": [10, 20, 50, 100, 200],     "commission_pct": 0.03},
+        "viva":    {"name": "Viva",    "amounts": [10, 20, 30, 50, 100],      "commission_pct": 0.035},
+        "entel":   {"name": "Entel",   "amounts": [20, 50, 100, 200, 300],    "commission_pct": 0.04},
+        "tigo":    {"name": "Tigo",    "amounts": [10, 20, 50, 100, 200, 500],"commission_pct": 0.03},
     }
 
-    def __init__(self, event_service=None, recharge_repo=None):
+    def __init__(self, provider, recharge_repo=None, event_service=None):
         """
         Args:
-            event_service:  EventService (opcional) — emite recharge_completed
-            recharge_repo:  RechargeRepository (opcional) — historial en BD.
-                            Si no se inyecta, el historial es solo en memoria
-                            (suficiente para el mock de Fase 6).
+            provider:      MockRechargeProvider o RealRechargeProvider.
+                           Inyectado desde el container — no hardcodeado aquí.
+            recharge_repo: RechargeRepository (opcional). Sin él, el historial
+                           se guarda solo en memoria (útil para tests aislados).
+            event_service: EventService (opcional). Emite recharge_completed.
         """
-        self.event_service = event_service
+        self.provider      = provider
         self.recharge_repo = recharge_repo
-        # Historial en memoria como fallback cuando no hay repo
+        self.event_service = event_service
         self._memory_history: list[dict] = []
-
-    def _require_auth(self):
-        if not Session.tenant_id:
-            raise Exception("[RechargeService] No autenticado")
-        return Session.tenant_id
 
     # ------------------------------------------------------------------ #
     # Catálogo                                                            #
     # ------------------------------------------------------------------ #
+
     def get_operators(self) -> list[dict]:
-        """Devuelve lista de operadoras disponibles con sus montos."""
+        """Lista de operadoras disponibles con sus montos para poblar la UI."""
         return [
             {"id": op_id, "name": info["name"], "amounts": info["amounts"]}
             for op_id, info in self.OPERATORS.items()
@@ -91,143 +67,117 @@ class RechargeService:
     def get_amounts_for(self, operator_id: str) -> list[int]:
         op = self.OPERATORS.get(operator_id)
         if not op:
-            raise ValueError(f"Operadora desconocida: {operator_id}")
+            from domain.exceptions import InvalidOperatorError
+            raise InvalidOperatorError(list(self.OPERATORS.keys()))
         return op["amounts"]
 
     # ------------------------------------------------------------------ #
-    # Ejecutar recarga                                                    #
+    # Procesar recarga                                                    #
     # ------------------------------------------------------------------ #
-    def recharge(self, phone: str, operator_id: str, amount: int) -> dict:
+
+    def process(self, phone: str, operator: str, amount: float) -> dict:
         """
-        Procesa una recarga electrónica.
+        Orquesta el flujo completo de una recarga electrónica.
 
-        Args:
-            phone:       Número a 10 dígitos.
-            operator_id: Clave de OPERATORS (telcel, att, etc.)
-            amount:      Monto en pesos (debe estar en OPERATORS[op].amounts)
-
-        Returns:
-            {
-                "success":      bool,
-                "folio":        str,    # Referencia de la transacción
-                "phone":        str,
-                "operator":     str,    # Nombre de la operadora
-                "amount":       int,
-                "commission":   float,  # Ganancia del negocio
-                "timestamp":    str,    # ISO
-                "message":      str,
-            }
-
-        DECISIÓN: nunca lanzamos excepción en el flow principal —
-        devolvemos success=False con message descriptivo para que la UI
-        lo muestre como alerta, no como crash.
+        Raises:
+            InvalidPhoneError:     número inválido (ValidationError → UI resalta campo)
+            InvalidOperatorError:  operadora no válida (ValidationError)
+            InvalidAmountError:    monto fuera de rango (ValidationError)
+            RechargeTimeoutError:  proveedor no respondió a tiempo
+            RechargeProviderError: fallo definitivo del proveedor externo
         """
         tenant_id = self._require_auth()
 
-        # Validaciones de dominio
-        phone_clean = "".join(c for c in phone if c.isdigit())
-        if len(phone_clean) != 10:
-            return {
-                "success": False, "message": "El número debe tener 10 dígitos",
-                "phone": phone, "operator": operator_id, "amount": amount,
-            }
+        # Validación delegada — lanza excepción tipada si algún campo falla
+        RechargeReady().enforce(phone, operator, amount)
 
-        op = self.OPERATORS.get(operator_id)
-        if not op:
-            return {
-                "success": False,
-                "message": f"Operadora '{operator_id}' no disponible",
-                "phone": phone, "operator": operator_id, "amount": amount,
-            }
+        op          = self.OPERATORS[operator]
+        commission  = round(float(amount) * op["commission_pct"], 2)
+        timestamp   = datetime.now().isoformat(timespec="seconds")
 
-        if amount not in op["amounts"]:
-            return {
-                "success": False,
-                "message": f"Monto ${amount} no disponible para {op['name']}",
-                "phone": phone, "operator": op["name"], "amount": amount,
-            }
+        # Registra pending en BD para trazabilidad incluso si el proveedor falla
+        recharge_id = self._create_pending(tenant_id, phone, operator, amount)
 
-        # Llamar al proveedor (mock por ahora)
-        api_result = self._call_provider_api(phone_clean, operator_id, amount)
+        # Llama al proveedor (Mock o Real según lo inyectado)
+        result = self.provider.charge(phone, operator, float(amount))
 
-        commission = round(amount * op["commission_pct"], 2)
-        folio      = api_result.get("folio", f"REC-{str(uuid.uuid4())[:8].upper()}")
-        timestamp  = datetime.now().isoformat(timespec="seconds")
+        # Añade campos calculados al resultado
+        result["commission"] = commission
+        result["timestamp"]  = timestamp
+        result["tenant_id"]  = tenant_id
 
-        result = {
-            "success":    api_result.get("success", False),
-            "folio":      folio,
-            "phone":      phone_clean,
-            "operator":   op["name"],
-            "amount":     amount,
-            "commission": commission,
-            "timestamp":  timestamp,
-            "message":    api_result.get("message", "Recarga procesada"),
-            "tenant_id":  tenant_id,
-        }
+        # Persiste el estado final
+        self._complete(recharge_id, result)
 
-        if result["success"]:
-            # Guardar en historial
-            self._save_to_history(result)
-
-            # Emitir evento (fire & forget)
-            if self.event_service:
-                try:
-                    self.event_service.emit(
-                        tenant_id, "recharge_completed",
-                        {"folio": folio, "amount": amount,
-                         "operator": op["name"], "commission": commission},
-                    )
-                except Exception:
-                    pass
+        # Evento fire & forget — fallo aquí no interrumpe al cajero
+        if result.get("status") == "success" and self.event_service:
+            try:
+                self.event_service.emit(
+                    tenant_id, "recharge_completed",
+                    {"tx_id": result.get("tx_id"), "amount": amount,
+                     "operator": op["name"], "commission": commission},
+                )
+            except Exception:
+                pass
 
         return result
 
     # ------------------------------------------------------------------ #
-    # Historial de recargas                                              #
+    # Historial                                                           #
     # ------------------------------------------------------------------ #
+
     def get_history(self, limit: int = 50) -> list[dict]:
-        """
-        Devuelve el historial de recargas del tenant.
-        Usa el repo si está disponible, si no devuelve la memoria.
-        """
+        """Historial de recargas del tenant. Usa repo si está disponible."""
         tenant_id = self._require_auth()
         if self.recharge_repo:
-            try:
-                res = self.recharge_repo.get_by_tenant(tenant_id, limit)
-                return res.data or []
-            except Exception:
-                pass
+            return self.recharge_repo.get_history(tenant_id, limit)
         return list(reversed(self._memory_history[-limit:]))
 
     # ------------------------------------------------------------------ #
     # Privados                                                            #
     # ------------------------------------------------------------------ #
-    def _call_provider_api(self, phone: str, operator_id: str, amount: int) -> dict:
+
+    def _require_auth(self) -> str:
+        if not Session.tenant_id:
+            raise Exception("[RechargeService] No autenticado")
+        return Session.tenant_id
+
+    def _create_pending(
+        self, tenant_id: str, phone: str, operator: str, amount: float
+    ) -> str | None:
         """
-        MOCK — Fase 6, paso 1.
-        En Fase 6 paso 3 esta función llama la API real del proveedor
-        (Multi, Telecard, etc.) sin cambiar nada más en el servicio.
-
-        DECISIÓN: retornamos éxito siempre en el mock con un folio generado.
-        El número de teléfono 0000000000 fuerza un fallo (útil para pruebas).
+        Inserta la recarga en BD con status='pending'.
+        Retorna el UUID para que _complete() pueda actualizar el estado.
+        Fallo silencioso — no interrumpe el flujo si la BD no está disponible.
         """
-        if phone == "0000000000":
-            return {"success": False, "message": "Número inválido (prueba de fallo)"}
-
-        return {
-            "success": True,
-            "folio":   f"REC-{str(uuid.uuid4())[:8].upper()}",
-            "message": f"Recarga de ${amount} aplicada exitosamente",
-        }
-
-    def _save_to_history(self, result: dict) -> None:
-        """Guarda en repo o en memoria según disponibilidad."""
         if self.recharge_repo:
             try:
-                self.recharge_repo.save(result)
+                return self.recharge_repo.create({
+                    "tenant_id": tenant_id,
+                    "phone":     phone,
+                    "operator":  operator,
+                    "amount":    amount,
+                })
+            except Exception as e:
+                print(f"[RechargeService] _create_pending falló: {e}")
+        return None
+
+    def _complete(self, recharge_id: str | None, result: dict) -> None:
+        """
+        Actualiza el estado de la recarga tras recibir la respuesta del proveedor.
+        Si no hay repo (o falló _create_pending), guarda en memoria como fallback.
+        """
+        if recharge_id and self.recharge_repo:
+            try:
+                self.recharge_repo.update_status(
+                    recharge_id,
+                    status=result.get("status", "failed"),
+                    ext_tx_id=result.get("tx_id"),
+                    ext_response={k: v for k, v in result.items()
+                                  if k not in ("tenant_id",)},
+                )
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[RechargeService] _complete falló: {e}")
         # Fallback a memoria
         self._memory_history.append(result)
