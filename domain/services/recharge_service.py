@@ -177,6 +177,8 @@ class RechargeService:
                     ext_tx_id=result.get("tx_id"),
                     ext_response={k: v for k, v in result.items()
                                   if k not in ("tenant_id",)},
+                    error_code=result.get("error_code"),
+                    error_message=result.get("error") or result.get("error_message"),
                 )
                 return
             except Exception as e:

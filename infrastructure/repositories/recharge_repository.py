@@ -77,22 +77,30 @@ class RechargeRepository:
     def update_status(
         self,
         *,
-        recharge_id:  str,
-        status:       str,
-        ext_tx_id:    Optional[str]  = None,
-        ext_response: Optional[dict] = None,
+        recharge_id:   str,
+        status:        str,
+        ext_tx_id:     Optional[str]  = None,
+        ext_response:  Optional[dict] = None,
+        error_code:    Optional[str]  = None,
+        error_message: Optional[str]  = None,
     ) -> None:
         """
         Actualiza status + datos externos de un recharge vía RPC complete_recharge.
         Llamar después de que el provider responda (éxito, fallo o timeout).
         Lanza RepositoryError si Supabase falla.
+
+        error_code y error_message son opcionales pero se deben pasar en fallos
+        para que las columnas dedicadas queden pobladas y permitan queries eficientes:
+            SELECT * FROM recharges WHERE error_code = 'INSUFFICIENT_BALANCE'
         """
         try:
             supabase.rpc("complete_recharge", {
-                "p_recharge_id":  recharge_id,
-                "p_status":       status,
-                "p_ext_tx_id":    ext_tx_id,
-                "p_ext_response": ext_response,
+                "p_recharge_id":   recharge_id,
+                "p_status":        status,
+                "p_ext_tx_id":     ext_tx_id,
+                "p_ext_response":  ext_response,
+                "p_error_code":    error_code,
+                "p_error_message": error_message,
             }).execute()
 
         except Exception as exc:
