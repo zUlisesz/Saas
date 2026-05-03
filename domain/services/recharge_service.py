@@ -126,11 +126,11 @@ class RechargeService:
     # Historial                                                           #
     # ------------------------------------------------------------------ #
 
-    def get_history(self, limit: int = 50) -> list[dict]:
+    def get_history(self, limit: int = 50) -> list:
         """Historial de recargas del tenant. Usa repo si está disponible."""
         tenant_id = self._require_auth()
         if self.recharge_repo:
-            return self.recharge_repo.get_history(tenant_id, limit)
+            return self.recharge_repo.get_history(tenant_id=tenant_id, limit=limit)
         return list(reversed(self._memory_history[-limit:]))
 
     # ------------------------------------------------------------------ #
@@ -152,12 +152,14 @@ class RechargeService:
         """
         if self.recharge_repo:
             try:
-                return self.recharge_repo.create({
-                    "tenant_id": tenant_id,
-                    "phone":     phone,
-                    "operator":  operator,
-                    "amount":    amount,
-                })
+                created_by = getattr(Session.current_user, "id", "") or ""
+                return self.recharge_repo.create(
+                    tenant_id=tenant_id,
+                    phone=phone,
+                    operator=operator,
+                    amount=amount,
+                    created_by=created_by,
+                )
             except Exception as e:
                 print(f"[RechargeService] _create_pending falló: {e}")
         return None
@@ -170,7 +172,7 @@ class RechargeService:
         if recharge_id and self.recharge_repo:
             try:
                 self.recharge_repo.update_status(
-                    recharge_id,
+                    recharge_id=recharge_id,
                     status=result.get("status", "failed"),
                     ext_tx_id=result.get("tx_id"),
                     ext_response={k: v for k, v in result.items()
