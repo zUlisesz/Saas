@@ -83,10 +83,7 @@ class MockRechargeProvider:
         elif roll < self._TIMEOUT_THRESHOLD:
             return self._failure_response(phone, operator, amount)
         else:
-            raise RechargeTimeoutError(
-                f"Timeout al contactar operador '{operator}' para {phone} "
-                f"(simulado — ocurre ~5% de las veces)"
-            )
+            raise RechargeTimeoutError()
 
     # ------------------------------------------------------------------ #
     # Privados                                                            #
