@@ -1,5 +1,6 @@
 from domain.schemas.product_schemas import CreateProductRequest
 from domain.exceptions import AuthenticationError, RepositoryError
+from domain.ports.product_repository import ProductRepositoryPort
 from session.session import Session
 from infrastructure.logging_config import get_logger
 
@@ -8,7 +9,7 @@ _log = get_logger(__name__)
 
 class CreateProductUseCase:
 
-    def __init__(self, product_repo, inventory_service=None, event_service=None):
+    def __init__(self, product_repo: ProductRepositoryPort, inventory_service=None, event_service=None):
         self.product_repo      = product_repo
         self.inventory_service = inventory_service
         self.event_service     = event_service

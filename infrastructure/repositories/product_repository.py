@@ -12,14 +12,17 @@
 # PRINCIPIO: este repositorio SOLO habla con Supabase.
 # Ninguna lógica de negocio aquí — eso es responsabilidad de ProductService.
 
-from config.supabase_client import supabase
+from config.supabase_client import get_client
 
 
 class ProductRepository:
 
+    def __init__(self, client=None):
+        self._db = client or get_client()
+
     def get_all(self, tenant_id):
         return (
-            supabase.table("products")
+            self._db.table("products")
             .select("*, categories(name)")
             .eq("tenant_id", tenant_id)
             .eq("is_active", True)
@@ -29,7 +32,7 @@ class ProductRepository:
 
     def get_by_id(self, product_id):
         return (
-            supabase.table("products")
+            self._db.table("products")
             .select("*, categories(name)")
             .eq("id", product_id)
             .single()
@@ -49,7 +52,7 @@ class ProductRepository:
         El servicio se encarga de verificar si data está vacía.
         """
         return (
-            supabase.table("products")
+            self._db.table("products")
             .select("*, categories(name)")
             .eq("tenant_id", tenant_id)
             .eq("barcode", barcode)
@@ -66,7 +69,7 @@ class ProductRepository:
         DECISIÓN: prioridad al match de name (más probable en uso cotidiano).
         """
         name_res = (
-            supabase.table("products")
+            self._db.table("products")
             .select("*, categories(name)")
             .eq("tenant_id", tenant_id)
             .eq("is_active", True)
@@ -74,7 +77,7 @@ class ProductRepository:
             .execute()
         )
         barcode_res = (
-            supabase.table("products")
+            self._db.table("products")
             .select("*, categories(name)")
             .eq("tenant_id", tenant_id)
             .eq("is_active", True)
@@ -96,7 +99,7 @@ class ProductRepository:
         if "tenant_id" not in data or not data["tenant_id"]:
             raise ValueError("tenant_id es requerido para crear un producto")
         try:
-            return supabase.table("products").insert(data).execute()
+            return self._db.table("products").insert(data).execute()
         except Exception as e:
             error_msg = str(e)
             if "row level security" in error_msg.lower():
@@ -106,7 +109,7 @@ class ProductRepository:
     def update(self, product_id, data):
         try:
             return (
-                supabase.table("products")
+                self._db.table("products")
                 .update(data)
                 .eq("id", product_id)
                 .execute()
@@ -120,7 +123,7 @@ class ProductRepository:
     def soft_delete(self, product_id):
         try:
             return (
-                supabase.table("products")
+                self._db.table("products")
                 .update({"is_active": False})
                 .eq("id", product_id)
                 .execute()
@@ -133,7 +136,7 @@ class ProductRepository:
 
     def count(self, tenant_id):
         return (
-            supabase.table("products")
+            self._db.table("products")
             .select("id", count="exact")  # type: ignore
             .eq("tenant_id", tenant_id)
             .eq("is_active", True)
@@ -147,7 +150,7 @@ class ProductRepository:
     def get_pending_products(self, tenant_id: str):
         """Productos cuyo barcode aún es PENDING-* (sin barcode real asignado)."""
         return (
-            supabase.table("products")
+            self._db.table("products")
             .select("id, name, barcode, barcode_type")
             .eq("tenant_id", tenant_id)
             .eq("is_active", True)
@@ -158,14 +161,14 @@ class ProductRepository:
     def add_barcode_history(self, data: dict):
         """Inserta una entrada en product_barcode_history. Fire & forget."""
         try:
-            supabase.table("product_barcode_history").insert(data).execute()
+            self._db.table("product_barcode_history").insert(data).execute()
         except Exception:
             pass  # No interrumpir el flujo principal si el historial falla
 
     def get_barcode_stats(self, tenant_id: str) -> dict:
         """Llama a la RPC barcode_coverage_stats() creada en migración 8."""
         try:
-            res = supabase.rpc(
+            res = self._db.rpc(
                 "barcode_coverage_stats", {"p_tenant_id": tenant_id}
             ).execute()
             return (res.data or [{}])[0]

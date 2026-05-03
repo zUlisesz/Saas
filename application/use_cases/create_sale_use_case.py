@@ -24,6 +24,7 @@
 
 from domain.schemas.sale_schemas import CreateSaleRequest
 from domain.exceptions import AuthenticationError, RepositoryError
+from domain.ports.sale_repository import SaleRepositoryPort
 from session.session import Session
 from infrastructure.logging_config import get_logger
 
@@ -32,7 +33,7 @@ _log = get_logger(__name__)
 
 class CreateSaleUseCase:
 
-    def __init__(self, sale_repo, inventory_service=None, event_service=None):
+    def __init__(self, sale_repo: SaleRepositoryPort, inventory_service=None, event_service=None):
         """
         Args:
             sale_repo:         SaleRepository   (requerido)
