@@ -31,6 +31,7 @@
 
 from session.session import Session
 from domain.exceptions import AuthenticationError, ValidationError
+from domain.ports.inventory_repository import InventoryRepositoryPort
 from infrastructure.logging_config import get_logger
 
 _log = get_logger(__name__)
@@ -38,7 +39,7 @@ _log = get_logger(__name__)
 
 class InventoryService:
 
-    def __init__(self, inventory_repo, event_service=None):
+    def __init__(self, inventory_repo: InventoryRepositoryPort, event_service=None):
         """
         Args:
             inventory_repo: InventoryRepository (requerido).

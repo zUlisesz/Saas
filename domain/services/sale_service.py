@@ -16,11 +16,12 @@
 #    inventory_service.consume_stock() en lugar de repo.decrement_stock().
 
 from session.session import Session
+from domain.ports.sale_repository import SaleRepositoryPort
 
 
 class SaleService:
 
-    def __init__(self, sale_repo, inventory_repo=None,
+    def __init__(self, sale_repo: SaleRepositoryPort, inventory_repo=None,
                  event_service=None, inventory_service=None):
         """
         Args:

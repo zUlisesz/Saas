@@ -14,10 +14,13 @@
 # Las funciones SQL que deben existir en Supabase están documentadas
 # en el archivo: analytics_migration.sql (entregado junto a este módulo).
 
-from config.supabase_client import supabase
+from config.supabase_client import get_client
 
 
 class AnalyticsRepository:
+
+    def __init__(self, client=None):
+        self._db = client or get_client()
 
     # ------------------------------------------------------------------ #
     # Ventas por día                                                       #
@@ -27,7 +30,7 @@ class AnalyticsRepository:
         Devuelve una lista de {day: date, total: numeric}.
         Llama a la función SQL 'sales_by_day(tenant uuid)'.
         """
-        return supabase.rpc("sales_by_day", {"tenant": tenant_id}).execute()
+        return self._db.rpc("sales_by_day", {"tenant": tenant_id}).execute()
 
     # ------------------------------------------------------------------ #
     # Ticket promedio                                                      #
@@ -37,7 +40,7 @@ class AnalyticsRepository:
         Devuelve el promedio de 'total' de las ventas del tenant.
         Llama a la función SQL 'avg_ticket(tenant uuid)'.
         """
-        return supabase.rpc("avg_ticket", {"tenant": tenant_id}).execute()
+        return self._db.rpc("avg_ticket", {"tenant": tenant_id}).execute()
 
     # ------------------------------------------------------------------ #
     # Top 10 productos más vendidos                                       #
@@ -47,7 +50,7 @@ class AnalyticsRepository:
         Devuelve lista de {name: text, total_qty: int}.
         Llama a la función SQL 'top_products(tenant uuid)'.
         """
-        return supabase.rpc("top_products", {"tenant": tenant_id}).execute()
+        return self._db.rpc("top_products", {"tenant": tenant_id}).execute()
 
     # ------------------------------------------------------------------ #
     # Ingresos totales                                                    #
@@ -59,7 +62,7 @@ class AnalyticsRepository:
         una query simple; no justifica una función SQL almacenada.
         """
         return (
-            supabase.table("sales")
+            self._db.table("sales")
             .select("total")
             .eq("tenant_id", tenant_id)
             .eq("status", "completed")
@@ -78,7 +81,7 @@ class AnalyticsRepository:
         today = date.today().isoformat()
 
         return (
-            supabase.table("sales")
+            self._db.table("sales")
             .select("id", count="exact") # type: ignore
             .eq("tenant_id", tenant_id)
             .gte("created_at", f"{today}T00:00:00")

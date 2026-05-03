@@ -33,10 +33,13 @@
 #
 # PRINCIPIO MANTENIDO: cero lógica de negocio en este archivo.
 
-from config.supabase_client import supabase
+from config.supabase_client import get_client
 
 
 class InventoryRepository:
+
+    def __init__(self, client=None):
+        self._db = client or get_client()
 
     # ------------------------------------------------------------------ #
     # LECTURA — Stock individual                                          #
@@ -45,7 +48,7 @@ class InventoryRepository:
     def get_stock(self, product_id: str):
         """Stock actual de un producto. Usado por consume_stock() y init_stock()."""
         return (
-            supabase.table("inventory")
+            self._db.table("inventory")
             .select("*")
             .eq("product_id", product_id)
             .execute()
@@ -62,7 +65,7 @@ class InventoryRepository:
         SaleService.consume_stock() no llama a este método — no afecta.
         """
         return (
-            supabase.table("inventory")
+            self._db.table("inventory")
             .select("*, products!inner(id, name, sku, price, cost, tenant_id, barcode)")
             .eq("products.tenant_id", tenant_id)
             .execute()
@@ -88,7 +91,7 @@ class InventoryRepository:
         SECURITY DEFINER en la función permite que RLS no bloquee
         los joins internos.
         """
-        return supabase.rpc(
+        return self._db.rpc(
             "get_inventory_with_alerts",
             {"p_tenant_id": tenant_id},
         ).execute()
@@ -105,7 +108,7 @@ class InventoryRepository:
         Más liviana que get_all_with_alerts — para badges y banners.
         REEMPLAZA get_low_stock() que usaba RPC obsoleta.
         """
-        return supabase.rpc(
+        return self._db.rpc(
             "get_low_stock_report",
             {"p_tenant_id": tenant_id},
         ).execute()
@@ -127,7 +130,7 @@ class InventoryRepository:
         ON CONFLICT(product_id) → UPDATE.
         """
         return (
-            supabase.table("inventory")
+            self._db.table("inventory")
             .upsert(
                 {
                     "product_id":   product_id,
@@ -164,7 +167,7 @@ class InventoryRepository:
         Incluye join a products para mostrar nombre en la UI.
         """
         return (
-            supabase.table("inventory_thresholds")
+            self._db.table("inventory_thresholds")
             .select("*, products(id, name, barcode)")
             .eq("tenant_id", tenant_id)
             .order("created_at", desc=False)
@@ -174,7 +177,7 @@ class InventoryRepository:
     def get_threshold_by_product(self, tenant_id: str, product_id: str):
         """Umbral específico de un producto. None si no existe."""
         return (
-            supabase.table("inventory_thresholds")
+            self._db.table("inventory_thresholds")
             .select("*")
             .eq("tenant_id", tenant_id)
             .eq("product_id", product_id)
@@ -194,7 +197,7 @@ class InventoryRepository:
         InventoryService antes de llamar aquí.
         """
         return (
-            supabase.table("inventory_thresholds")
+            self._db.table("inventory_thresholds")
             .upsert(data, on_conflict="tenant_id,product_id")
             .execute()
         )
@@ -214,7 +217,7 @@ class InventoryRepository:
         es la fuente técnica para debugging/auditoría.
         """
         return (
-            supabase.table("inventory_movements_log")
+            self._db.table("inventory_movements_log")
             .select("*")
             .eq("tenant_id", tenant_id)
             .eq("product_id", product_id)
@@ -232,7 +235,7 @@ class InventoryRepository:
         """LEGACY — tabla stock_movements. Conservado para historial previo."""
         try:
             return (
-                supabase.table("stock_movements")
+                self._db.table("stock_movements")
                 .insert(
                     {
                         "product_id":   product_id,
@@ -260,14 +263,14 @@ class InventoryRepository:
         Falla silenciosamente (kardex es observabilidad, no bloquea la venta).
         """
         try:
-            return supabase.table("kardex").insert(entry).execute()
+            return self._db.table("kardex").insert(entry).execute()
         except Exception as e:
             print(f"[KARDEX WARNING] No se pudo registrar movimiento: {e}")
             return None
 
     def get_kardex(self, tenant_id: str, product_id: str, limit: int = 50):
         """Historial kardex de un producto. Fuente contable oficial."""
-        return supabase.rpc(
+        return self._db.rpc(
             "kardex_by_product",
             {"p_tenant": tenant_id, "p_product": product_id, "p_limit": limit},
         ).execute()

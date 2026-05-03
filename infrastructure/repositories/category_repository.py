@@ -1,12 +1,15 @@
 # infrastructure/repositories/category_repository.py
-from config.supabase_client import supabase
+from config.supabase_client import get_client
 
 
 class CategoryRepository:
 
+    def __init__(self, client=None):
+        self._db = client or get_client()
+
     def get_all(self, tenant_id):
         return (
-            supabase.table("categories")
+            self._db.table("categories")
             .select("*")
             .eq("tenant_id", tenant_id)
             .order("name")
@@ -18,7 +21,7 @@ class CategoryRepository:
         if "tenant_id" not in data or not data["tenant_id"]:
             raise ValueError("tenant_id es requerido para crear una categoría")
         try:
-            res = supabase.table("categories").insert(data).execute()
+            res = self._db.table("categories").insert(data).execute()
             return res
         except Exception as e:
             error_msg = str(e)
@@ -29,7 +32,7 @@ class CategoryRepository:
     def update(self, category_id, data):
         try:
             return (
-                supabase.table("categories")
+                self._db.table("categories")
                 .update(data)
                 .eq("id", category_id)
                 .execute()
@@ -43,7 +46,7 @@ class CategoryRepository:
     def delete(self, category_id, tenant_id):
         try:
             res = (
-                supabase.table("categories")
+                self._db.table("categories")
                 .delete()
                 .eq("id", category_id)
                 .eq("tenant_id", tenant_id)

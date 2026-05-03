@@ -1,17 +1,20 @@
 # infrastructure/repositories/sale_repository.py
 
-from config.supabase_client import supabase
+from config.supabase_client import get_client
 from datetime import date
 
 
 class SaleRepository:
+
+    def __init__(self, client=None):
+        self._db = client or get_client()
 
     def create_sale(self, sale_data):
         # Ensure tenant_id is present for RLS policy
         if "tenant_id" not in sale_data or not sale_data["tenant_id"]:
             raise ValueError("tenant_id es requerido para crear una venta")
         try:
-            res = supabase.table("sales").insert(sale_data).execute()
+            res = self._db.table("sales").insert(sale_data).execute()
             return res
         except Exception as e:
             error_msg = str(e)
@@ -23,7 +26,7 @@ class SaleRepository:
         if not items:
             return None
         try:
-            res = supabase.table("sale_items").insert(items).execute()
+            res = self._db.table("sale_items").insert(items).execute()
             return res
         except Exception as e:
             error_msg = str(e)
@@ -33,7 +36,7 @@ class SaleRepository:
 
     def create_payment(self, payment_data):
         try:
-            res = supabase.table("payments").insert(payment_data).execute()
+            res = self._db.table("payments").insert(payment_data).execute()
             return res
         except Exception as e:
             error_msg = str(e)
@@ -43,7 +46,7 @@ class SaleRepository:
 
     def get_all(self, tenant_id, limit=50):
         return (
-            supabase.table("sales")
+            self._db.table("sales")
             .select("*, sale_items(*, products(name)), payments(*)")
             .eq("tenant_id", tenant_id)
             .order("created_at", desc=True)
@@ -54,7 +57,7 @@ class SaleRepository:
     def get_today_stats(self, tenant_id):
         today = date.today().isoformat()
         return (
-            supabase.table("sales")
+            self._db.table("sales")
             .select("id, total, status")
             .eq("tenant_id", tenant_id)
             .gte("created_at", today)
@@ -63,7 +66,7 @@ class SaleRepository:
 
     def get_by_id(self, sale_id):
         return (
-            supabase.table("sales")
+            self._db.table("sales")
             .select("*, sale_items(*, products(name, sku)), payments(*)")
             .eq("id", sale_id)
             .single()
@@ -78,11 +81,11 @@ class SaleRepository:
         lanza error en Postgres, por eso se eliminan primero.
         """
         try:
-            supabase.table("payments").delete().eq("sale_id", sale_id).execute()
+            self._db.table("payments").delete().eq("sale_id", sale_id).execute()
         except Exception:
             pass
         try:
-            supabase.table("sale_items").delete().eq("sale_id", sale_id).execute()
+            self._db.table("sale_items").delete().eq("sale_id", sale_id).execute()
         except Exception:
             pass
-        return supabase.table("sales").delete().eq("id", sale_id).execute()
+        return self._db.table("sales").delete().eq("id", sale_id).execute()
