@@ -1,11 +1,23 @@
 # application/controllers/recharge_controller.py
 #
-# NUEVA — Fase 6: Recargas Electrónicas
+# Fase 6: Recargas Electrónicas — Controller.
 #
 # RESPONSABILIDAD:
-#   Puente entre RechargeView/PosView y RechargeService.
-#   Exposición del catálogo de operadoras para que la UI se construya
-#   dinámicamente (no hardcoded en la vista).
+#   Puente entre RechargeView y RechargeService.
+#   Valida entrada vía RechargeRequest, convierte excepciones de dominio en
+#   snackbars, y retorna RechargeResponse (o None si falló).
+#
+# MANEJO DE ERRORES:
+#   ValidationError       → snackbar con el mensaje del campo inválido
+#   RechargeTimeoutError  → snackbar específico de timeout
+#   RechargeProviderError → snackbar de error externo
+#   Exception             → snackbar genérico (fallback)
+
+from domain.schemas.recharge_schemas import RechargeRequest
+from domain.exceptions import (
+    ValidationError, RechargeTimeoutError, RechargeProviderError,
+)
+
 
 class RechargeController:
 
@@ -27,24 +39,46 @@ class RechargeController:
         except Exception:
             return []
 
-    def process_recharge(self, phone: str, operator_id: str, amount: int) -> dict | None:
+    def process_recharge(self, phone: str, operator: str, amount: float):
         """
-        Procesa una recarga y muestra snackbar apropiado.
+        Valida, procesa y muestra snackbar apropiado según el resultado.
 
         Returns:
-            dict con resultado si éxito, None si falló.
+            RechargeResponse si la recarga fue procesada (success o failed),
+            None si hubo un error de validación, timeout o provider.
         """
         try:
-            result = self.service.recharge(phone, operator_id, amount)
-            if result.get("success"):
-                commission = result.get("commission", 0)
+            req = RechargeRequest(phone=phone, operator=operator, amount=amount)
+            req.validate()
+
+            response = self.service.process(req.phone, req.operator, float(req.amount))
+
+            if response.status == 'success':
+                commission = self.service.estimate_commission(response.operator, response.amount)
                 self.app.show_snackbar(
-                    f"✓ Recarga exitosa | Folio: {result['folio']} | Comisión: ${commission:.2f}"
+                    f"✓ Recarga exitosa | TX: {response.tx_id or '-'} | "
+                    f"Comisión: Bs {commission:.2f}"
                 )
-                return result
-            else:
-                self.app.show_snackbar(result.get("message", "Error en recarga"), error=True)
-                return None
+                return response
+
+            # status == 'failed'
+            self.app.show_snackbar(response.user_message, error=True)
+            return response
+
+        except ValidationError as ex:
+            self.app.show_snackbar(str(ex), error=True)
+            return None
+
+        except RechargeTimeoutError:
+            self.app.show_snackbar(
+                "Tiempo de espera agotado. Verifica en el historial.", error=True
+            )
+            return None
+
+        except RechargeProviderError as ex:
+            self.app.show_snackbar(f"Error del proveedor: {str(ex)}", error=True)
+            return None
+
         except Exception as ex:
             self.app.show_snackbar(str(ex), error=True)
             return None
